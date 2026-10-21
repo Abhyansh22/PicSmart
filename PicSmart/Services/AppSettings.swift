@@ -12,7 +12,7 @@ final class AppSettings {
     static let shared = AppSettings()
     
     /// Preset threshold options in megabytes
-    static let presetsMB: [Int] = [50, 100, 200, 500, 1000]
+    static let presetsMB: [Int] = [0, 50, 100, 200, 500, 1000, 10000]
     static let defaultThresholdMB: Int = 200
     private static let thresholdKey = "picsmart.settings.largeVideoThresholdMB"
     
