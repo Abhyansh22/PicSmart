@@ -10,12 +10,16 @@ import Photos
 final class ThumbnailService {
     static let shared = ThumbnailService()
     
-    private let imageManager = PHCachingImageManager()
+    // Dedicated UI caching image manager for grid views and prefetching
+    private let uiImageManager = PHCachingImageManager()
+    
+    // Dedicated background image manager isolated exclusively for offline matrix analysis
+    nonisolated private static let analysisImageManager = PHImageManager()
     
     // MARK: - Fast Scanning Thumbnail
     
     /// Requests a fast, local-only 32x32 thumbnail for matrix downsampling and hashing.
-    /// Runs synchronously inside background tasks without blocking on network.
+    /// Runs synchronously inside background tasks without blocking the UI's caching image manager.
     nonisolated func requestFastAnalysisThumbnail(for asset: PHAsset, targetSize: CGSize = CGSize(width: 32, height: 32)) -> CGImage? {
         let options = PHImageRequestOptions()
         options.deliveryMode = .fastFormat
@@ -24,7 +28,7 @@ final class ThumbnailService {
         options.resizeMode = .fast
         
         var resultImage: CGImage?
-        imageManager.requestImage(
+        Self.analysisImageManager.requestImage(
             for: asset,
             targetSize: targetSize,
             contentMode: .aspectFill,
@@ -47,7 +51,7 @@ final class ThumbnailService {
         options.isNetworkAccessAllowed = true
         options.resizeMode = .fast
         
-        return imageManager.requestImage(
+        return uiImageManager.requestImage(
             for: asset,
             targetSize: targetSize,
             contentMode: .aspectFill,
@@ -64,7 +68,7 @@ final class ThumbnailService {
             options.isNetworkAccessAllowed = true
             
             var resumed = false
-            self.imageManager.requestImage(
+            self.uiImageManager.requestImage(
                 for: asset,
                 targetSize: PHImageManagerMaximumSize,
                 contentMode: .aspectFit,
@@ -79,7 +83,7 @@ final class ThumbnailService {
     }
     
     func cancelImageRequest(_ requestID: PHImageRequestID) {
-        imageManager.cancelImageRequest(requestID)
+        uiImageManager.cancelImageRequest(requestID)
     }
     
     // MARK: - Prefetching
@@ -89,7 +93,7 @@ final class ThumbnailService {
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
         options.isNetworkAccessAllowed = true
-        imageManager.startCachingImages(for: assets, targetSize: targetSize, contentMode: .aspectFill, options: options)
+        uiImageManager.startCachingImages(for: assets, targetSize: targetSize, contentMode: .aspectFill, options: options)
     }
     
     func stopCaching(assets: [PHAsset], targetSize: CGSize = CGSize(width: 250, height: 250)) {
@@ -97,10 +101,10 @@ final class ThumbnailService {
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
         options.isNetworkAccessAllowed = true
-        imageManager.stopCachingImages(for: assets, targetSize: targetSize, contentMode: .aspectFill, options: options)
+        uiImageManager.stopCachingImages(for: assets, targetSize: targetSize, contentMode: .aspectFill, options: options)
     }
     
     func stopAllCaching() {
-        imageManager.stopCachingImagesForAllAssets()
+        uiImageManager.stopCachingImagesForAllAssets()
     }
 }

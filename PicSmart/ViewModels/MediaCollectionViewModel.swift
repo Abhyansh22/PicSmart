@@ -23,6 +23,8 @@ final class MediaCollectionViewModel {
     var isLoading: Bool = false
     var progressMessage: String?
     var progressFraction: Double = 0.0
+    var progress: AnalysisProgress?
+    var isActive: Bool = false
     
     @ObservationIgnored
     private var loadTask: Task<Void, Never>?
@@ -35,9 +37,22 @@ final class MediaCollectionViewModel {
         PhotoLibraryService.shared.libraryChangePublisher
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.load()
+                guard let self, self.isActive else { return }
+                self.load()
             }
             .store(in: &cancellables)
+    }
+    
+    func onAppear() {
+        isActive = true
+        if totalCount == 0 && !isLoading {
+            load()
+        }
+    }
+    
+    func onDisappear() {
+        isActive = false
+        cancel()
     }
     
     var totalCount: Int {
@@ -86,12 +101,14 @@ final class MediaCollectionViewModel {
                     if Task.isCancelled { break }
                     self.largeVideoAssets = sortedSnapshot
                     self.fileSizes = sizeMap
+                    self.progress = progress
                     self.progressMessage = progress.stage
                     self.progressFraction = progress.fractionCompleted
                 }
                 
                 self.isLoading = false
                 self.progressMessage = nil
+                self.progress = nil
                 
             default:
                 self.isLoading = false

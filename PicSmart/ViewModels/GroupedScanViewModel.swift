@@ -16,6 +16,7 @@ final class GroupedScanViewModel {
     var isScanning: Bool = false
     var progress: AnalysisProgress?
     var statusMessage: String?
+    var isActive: Bool = false
     
     @ObservationIgnored
     private var scanTask: Task<Void, Never>?
@@ -28,9 +29,22 @@ final class GroupedScanViewModel {
         PhotoLibraryService.shared.libraryChangePublisher
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.startScan()
+                guard let self, self.isActive else { return }
+                self.startScan()
             }
             .store(in: &cancellables)
+    }
+    
+    func onAppear() {
+        isActive = true
+        if groups.isEmpty && !isScanning {
+            startScan()
+        }
+    }
+    
+    func onDisappear() {
+        isActive = false
+        cancel()
     }
     
     var totalSavingsBytes: Int64 {

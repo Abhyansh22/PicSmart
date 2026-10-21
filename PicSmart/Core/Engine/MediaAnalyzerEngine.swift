@@ -18,15 +18,28 @@ actor MediaAnalyzerEngine {
     private var runningDuplicateVideosTask: Task<[AssetGroup], Never>?
     private var runningSimilarPhotosTask: Task<[AssetGroup], Never>?
     
+    // MARK: - In-Memory Video Size Cache
+    
+    func setCachedVideoSizes(_ sizes: [String: Int64]) {
+        self.videoSizeCache.merge(sizes) { _, new in new }
+    }
+    
+    func cachedLargeVideoCount(minThresholdBytes: Int64) -> Int? {
+        guard !videoSizeCache.isEmpty else { return nil }
+        return videoSizeCache.values.filter { $0 >= minThresholdBytes }.count
+    }
+    
     // MARK: - Large Videos Progressive Stream
     
     /// Streams large videos progressively as sizes are calculated off the main thread.
     /// Emits updated sorted snapshots every batchSize items so the user sees results immediately.
     func streamLargeVideos(
         minThresholdBytes: Int64,
-        batchYieldInterval: Int = 25
+        batchYieldInterval: Int = 20
     ) -> AsyncStream<(assets: [PHAsset], fileSizes: [String: Int64], progress: AnalysisProgress)> {
-        AsyncStream { continuation in
+        let initialCached = self.videoSizeCache
+        
+        return AsyncStream { continuation in
             Task.detached(priority: .userInitiated) {
                 let options = PHFetchOptions()
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
@@ -40,7 +53,7 @@ actor MediaAnalyzerEngine {
                 }
                 
                 var items: [(asset: PHAsset, size: Int64)] = []
-                var sizeMap: [String: Int64] = [:]
+                var sizeMap = initialCached
                 var processed = 0
                 
                 fetchResult.enumerateObjects { asset, _, stop in
@@ -49,10 +62,18 @@ actor MediaAnalyzerEngine {
                         return
                     }
                     
-                    let size = asset.primaryResourceFileSize ?? 0
+                    let size: Int64
+                    if let cached = sizeMap[asset.localIdentifier] {
+                        size = cached
+                    } else {
+                        size = autoreleasepool {
+                            asset.primaryResourceFileSize ?? 0
+                        }
+                        sizeMap[asset.localIdentifier] = size
+                    }
+                    
                     if size >= minThresholdBytes {
                         items.append((asset, size))
-                        sizeMap[asset.localIdentifier] = size
                     }
                     processed += 1
                     
@@ -67,6 +88,9 @@ actor MediaAnalyzerEngine {
                         continuation.yield((sortedSnapshot, sizeMap, progress))
                     }
                 }
+                
+                // Update engine cache with discovered sizes
+                await MediaAnalyzerEngine.shared.setCachedVideoSizes(sizeMap)
                 
                 let finalSorted = items.sorted { $0.size > $1.size }.map(\.asset)
                 continuation.yield((finalSorted, sizeMap, AnalysisProgress(completed: total, total: total, stage: "Complete")))

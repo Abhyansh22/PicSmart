@@ -60,13 +60,16 @@ struct ExactDuplicateFunnel: Sendable {
         for group in candidateGroups {
             for asset in group {
                 if Task.isCancelled { return [] }
-                let size = asset.primaryResourceFileSize ?? 0
-                if size > 0 {
-                    assetFileSizes[asset.localIdentifier] = size
-                    sizeBuckets[size, default: []].append(asset)
+                autoreleasepool {
+                    let size = asset.primaryResourceFileSize ?? 0
+                    if size > 0 {
+                        assetFileSizes[asset.localIdentifier] = size
+                        sizeBuckets[size, default: []].append(asset)
+                    }
                 }
                 processedCount += 1
                 if processedCount % 20 == 0 || processedCount == totalCandidates {
+                    await Task.yield()
                     progressHandler?(AnalysisProgress(completed: processedCount, total: totalCandidates, stage: "Analyzing file byte sizes (\(processedCount)/\(totalCandidates))…"))
                 }
             }

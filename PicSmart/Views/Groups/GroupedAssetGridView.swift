@@ -23,22 +23,14 @@ struct GroupedAssetGridView: View {
                 .ignoresSafeArea()
             
             if viewModel.isScanning && viewModel.groups.isEmpty {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.2)
-                    
-                    if let msg = viewModel.statusMessage {
-                        Text(msg)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                ScanningProgressView(
+                    category: category,
+                    progress: viewModel.progress,
+                    statusMessage: viewModel.statusMessage,
+                    onCancel: {
+                        viewModel.cancel()
                     }
-                    
-                    if let prog = viewModel.progress, prog.total > 0 {
-                        ProgressView(value: prog.fractionCompleted)
-                            .progressViewStyle(.linear)
-                            .padding(.horizontal, 40)
-                    }
-                }
+                )
             } else if viewModel.groups.isEmpty {
                 ContentUnavailableView(
                     "No \(category.title) Found",
@@ -98,12 +90,10 @@ struct GroupedAssetGridView: View {
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if viewModel.groups.isEmpty {
-                viewModel.startScan()
-            }
+            viewModel.onAppear()
         }
         .onDisappear {
-            viewModel.cancel()
+            viewModel.onDisappear()
         }
         .alert("Clean All \(category.title)?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }

@@ -80,12 +80,10 @@ struct MediaGridView: View {
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if viewModel.totalCount == 0 {
-                viewModel.load()
-            }
+            viewModel.onAppear()
         }
         .onDisappear {
-            viewModel.cancel()
+            viewModel.onDisappear()
         }
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)

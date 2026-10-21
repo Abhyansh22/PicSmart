@@ -44,16 +44,12 @@ struct SimilarPhotosFunnel: Sendable {
         // Filter out screenshots
         var eligibleAssets: [PHAsset] = []
         var assetMap = [String: PHAsset]()
-        var assetFileSizes = [String: Int64]()
         
         fetchResult.enumerateObjects { asset, _, stop in
             if Task.isCancelled { stop.pointee = true; return }
             if !asset.mediaSubtypes.contains(.photoScreenshot) {
                 eligibleAssets.append(asset)
                 assetMap[asset.localIdentifier] = asset
-                if let size = asset.primaryResourceFileSize {
-                    assetFileSizes[asset.localIdentifier] = size
-                }
             }
         }
         
@@ -116,6 +112,7 @@ struct SimilarPhotosFunnel: Sendable {
             
             completed += 1
             if completed % 25 == 0 || completed == eligibleAssets.count {
+                await Task.yield()
                 progressHandler?(AnalysisProgress(completed: completed, total: eligibleAssets.count, stage: "Fingerprinting photos (\(completed)/\(eligibleAssets.count))…"))
             }
         }
@@ -218,6 +215,18 @@ struct SimilarPhotosFunnel: Sendable {
         
         let clusters: [[CandidateSignature]] = CompleteLinkClustering.cluster(items: uniqueParticipants) { (left: CandidateSignature, right: CandidateSignature) in
             similarPairLookup.contains("\(left.id)_\(right.id)")
+        }
+        
+        // Deferred byte size lookup: query ONLY the few assets in confirmed clusters
+        var assetFileSizes = [String: Int64]()
+        for cluster in clusters {
+            for candidate in cluster {
+                autoreleasepool {
+                    if let size = candidate.asset.primaryResourceFileSize {
+                        assetFileSizes[candidate.id] = size
+                    }
+                }
+            }
         }
         
         // Build final AssetGroups and tag "Best Shot" using Laplacian sharpness score

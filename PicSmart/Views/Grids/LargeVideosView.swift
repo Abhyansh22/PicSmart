@@ -23,17 +23,14 @@ struct LargeVideosView: View {
                 .ignoresSafeArea()
             
             if viewModel.isLoading && viewModel.largeVideoAssets.isEmpty {
-                VStack(spacing: 16) {
-                    ProgressView(value: viewModel.progressFraction)
-                        .progressViewStyle(.linear)
-                        .padding(.horizontal, 40)
-                    
-                    if let msg = viewModel.progressMessage {
-                        Text(msg)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                ScanningProgressView(
+                    category: .largeVideos,
+                    progress: viewModel.progress,
+                    statusMessage: viewModel.progressMessage,
+                    onCancel: {
+                        viewModel.cancel()
                     }
-                }
+                )
             } else if viewModel.largeVideoAssets.isEmpty {
                 ContentUnavailableView(
                     "No Large Videos Found",
@@ -96,12 +93,10 @@ struct LargeVideosView: View {
         .navigationTitle("Large Videos")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if viewModel.largeVideoAssets.isEmpty {
-                viewModel.load()
-            }
+            viewModel.onAppear()
         }
         .onDisappear {
-            viewModel.cancel()
+            viewModel.onDisappear()
         }
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)

@@ -83,11 +83,16 @@ struct HomeView: View {
             SettingsView()
         }
         .onChange(of: settings.largeVideoThresholdMB) { _, _ in
-            viewModel.refreshCounts()
+            if viewModel.isViewActive {
+                viewModel.refreshCounts()
+            }
         }
         .onAppear {
-            viewModel.refreshCounts()
+            viewModel.onAppear()
             handleCommandLineArguments()
+        }
+        .onDisappear {
+            viewModel.onDisappear()
         }
         .onOpenURL { url in
             handleDeepLink(url)

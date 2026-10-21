@@ -13,6 +13,7 @@ import Observation
 final class HomeViewModel {
     var counts: [GalleryCategory: Int] = [:]
     var isLoadingCounts: Bool = false
+    var isViewActive: Bool = false
     
     @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
@@ -23,9 +24,20 @@ final class HomeViewModel {
         PhotoLibraryService.shared.libraryChangePublisher
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.refreshCounts()
+                guard let self, self.isViewActive else { return }
+                self.refreshCounts()
             }
             .store(in: &cancellables)
+    }
+    
+    func onAppear() {
+        isViewActive = true
+        refreshCounts()
+    }
+    
+    func onDisappear() {
+        isViewActive = false
+        countTask?.cancel()
     }
     
     func refreshCounts() {
@@ -33,19 +45,25 @@ final class HomeViewModel {
         countTask = Task {
             isLoadingCounts = true
             
+            // Tier 0 SQLite database queries: instant (< 1ms)
             async let scCount = PhotoLibraryService.shared.fetchScreenshotsCount()
             async let vCount = PhotoLibraryService.shared.fetchVideosCount()
-            let threshold = AppSettings.shared.largeVideoThresholdBytes
-            async let lvCount = MediaAnalyzerEngine.shared.countLargeVideos(minThresholdBytes: threshold)
             
             let screenshots = await scCount
             let videos = await vCount
-            let largeVideos = await lvCount
+            
+            // Fast in-memory check for large video count without blocking IPC
+            let threshold = AppSettings.shared.largeVideoThresholdBytes
+            let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: threshold)
             
             if !Task.isCancelled {
                 counts[.screenshots] = screenshots
                 counts[.videos] = videos
-                counts[.largeVideos] = largeVideos
+                if let cachedLv {
+                    counts[.largeVideos] = cachedLv
+                } else {
+                    counts.removeValue(forKey: .largeVideos)
+                }
             }
             isLoadingCounts = false
         }

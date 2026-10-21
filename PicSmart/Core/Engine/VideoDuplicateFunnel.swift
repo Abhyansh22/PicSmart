@@ -59,13 +59,16 @@ struct VideoDuplicateFunnel: Sendable {
         for group in metaCandidates {
             for asset in group {
                 if Task.isCancelled { return [] }
-                let size = asset.primaryResourceFileSize ?? 0
-                if size > 0 {
-                    assetFileSizes[asset.localIdentifier] = size
-                    sizeBuckets[size, default: []].append(asset)
+                autoreleasepool {
+                    let size = asset.primaryResourceFileSize ?? 0
+                    if size > 0 {
+                        assetFileSizes[asset.localIdentifier] = size
+                        sizeBuckets[size, default: []].append(asset)
+                    }
                 }
                 processed += 1
                 if processed % 10 == 0 || processed == totalCandidates {
+                    await Task.yield()
                     progressHandler?(AnalysisProgress(completed: processed, total: totalCandidates, stage: "Comparing video storage sizes (\(processed)/\(totalCandidates))…"))
                 }
             }
