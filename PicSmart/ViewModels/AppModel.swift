@@ -14,8 +14,8 @@ final class AppModel {
     let screenshotsViewModel = MediaCollectionViewModel(category: .screenshots)
     let videosViewModel = MediaCollectionViewModel(category: .videos)
     let largeVideosViewModel = MediaCollectionViewModel(category: .largeVideos)
-    let favoritesViewModel = MediaCollectionViewModel(category: .favorites)
-    let peopleViewModel = MediaCollectionViewModel(category: .people)
+    let blurredPhotosViewModel = BlurredPhotosViewModel()
+    let peopleAndFacesViewModel = PeopleAndFacesViewModel()
     
     let duplicatePhotosViewModel = GroupedScanViewModel(category: .duplicatePhotos)
     let duplicateVideosViewModel = GroupedScanViewModel(category: .duplicateVideos)
@@ -40,6 +40,12 @@ final class AppModel {
             self?.refreshCounts()
         }
         largeVideosViewModel.onScanCompleted = { [weak self] in
+            self?.refreshCounts()
+        }
+        blurredPhotosViewModel.onScanCompleted = { [weak self] in
+            self?.refreshCounts()
+        }
+        peopleAndFacesViewModel.onScanCompleted = { [weak self] in
             self?.refreshCounts()
         }
         hydratePersistedClusters()
@@ -81,6 +87,12 @@ final class AppModel {
         if largeVideosViewModel.sortedLargeVideoAssets.isEmpty {
             largeVideosViewModel.hasLoaded = false
         }
+        if blurredPhotosViewModel.items.isEmpty {
+            blurredPhotosViewModel.hasCompletedScan = false
+        }
+        if peopleAndFacesViewModel.items.isEmpty {
+            peopleAndFacesViewModel.hasCompletedScan = false
+        }
         
         hydratePersistedClusters()
         refreshCounts()
@@ -94,10 +106,10 @@ final class AppModel {
             return counts[.screenshots]
         case .videos:
             return counts[.videos]
-        case .favorites:
-            return counts[.favorites]
+        case .blurredPhotos:
+            return blurredPhotosViewModel.hasCompletedScan ? blurredPhotosViewModel.totalCount : counts[.blurredPhotos]
         case .people:
-            return counts[.people]
+            return peopleAndFacesViewModel.hasCompletedScan ? peopleAndFacesViewModel.totalCount : counts[.people]
         case .largeVideos:
             return largeVideosViewModel.hasLoaded ? largeVideosViewModel.totalCount : counts[.largeVideos]
         case .duplicatePhotos:
@@ -119,6 +131,10 @@ final class AppModel {
             return similarPhotosViewModel.isScanning || similarPhotosViewModel.isRefreshing
         case .largeVideos:
             return largeVideosViewModel.isLoading || largeVideosViewModel.isRefreshing
+        case .blurredPhotos:
+            return blurredPhotosViewModel.isScanning || blurredPhotosViewModel.isRefreshing
+        case .people:
+            return peopleAndFacesViewModel.isScanning || peopleAndFacesViewModel.isRefreshing
         default:
             return false
         }
@@ -132,13 +148,9 @@ final class AppModel {
             // Tier 0 SQLite database queries: instant (< 1ms)
             async let scCount = PhotoLibraryService.shared.fetchScreenshotsCount()
             async let vCount = PhotoLibraryService.shared.fetchVideosCount()
-            async let favCount = PhotoLibraryService.shared.fetchFavoritesCount()
-            async let pplCount = PhotoLibraryService.shared.fetchPeopleAndPortraitsCount()
             
             let screenshots = await scCount
             let videos = await vCount
-            let favorites = await favCount
-            let people = await pplCount
             
             let threshold = AppSettings.shared.largeVideoThresholdBytes
             let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: threshold)
@@ -146,14 +158,18 @@ final class AppModel {
             if !Task.isCancelled {
                 counts[.screenshots] = screenshots
                 counts[.videos] = videos
-                counts[.favorites] = favorites
-                counts[.people] = people
                 if let cachedLv {
                     counts[.largeVideos] = cachedLv
                 } else if largeVideosViewModel.hasLoaded {
                     counts[.largeVideos] = largeVideosViewModel.totalCount
                 }
                 
+                if blurredPhotosViewModel.hasCompletedScan {
+                    counts[.blurredPhotos] = blurredPhotosViewModel.totalCount
+                }
+                if peopleAndFacesViewModel.hasCompletedScan {
+                    counts[.people] = peopleAndFacesViewModel.totalCount
+                }
                 if duplicatePhotosViewModel.hasCompletedScan {
                     counts[.duplicatePhotos] = duplicatePhotosViewModel.totalRedundantCount
                 }
@@ -190,12 +206,12 @@ final class AppModel {
         duplicateVideosViewModel.pruneDeletedAssets(deleted)
         similarPhotosViewModel.pruneDeletedAssets(deleted)
         
-        // 2. Prune from flat ViewModels
+        // 2. Prune from specialized & flat ViewModels
+        blurredPhotosViewModel.pruneDeletedAssets(deleted)
+        peopleAndFacesViewModel.pruneDeletedAssets(deleted)
         largeVideosViewModel.pruneDeletedAssets(deleted)
         screenshotsViewModel.pruneDeletedAssets(deleted)
         videosViewModel.pruneDeletedAssets(deleted)
-        favoritesViewModel.pruneDeletedAssets(deleted)
-        peopleViewModel.pruneDeletedAssets(deleted)
         
         // 3. Prune SwiftData & record cleanup log
         let sampleIds = Array(deleted.prefix(4))
@@ -232,8 +248,6 @@ final class AppModel {
         case .screenshots: return screenshotsViewModel
         case .videos: return videosViewModel
         case .largeVideos: return largeVideosViewModel
-        case .favorites: return favoritesViewModel
-        case .people: return peopleViewModel
         default: return screenshotsViewModel
         }
     }

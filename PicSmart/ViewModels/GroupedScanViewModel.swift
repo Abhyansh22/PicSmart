@@ -60,7 +60,7 @@ final class GroupedScanViewModel {
     }
     
     var totalRedundantCount: Int {
-        groups.reduce(0) { $0 + $1.nonKeepers.count }
+        groups.reduce(0) { $0 + $1.markedForDeletionIds.count }
     }
     
     func startScan() {
@@ -190,13 +190,15 @@ final class GroupedScanViewModel {
             let assets = dto.assetIds.compactMap { assetMap[$0] }
             guard assets.count >= 2 else { continue }
             
+            let explicitMarked = dto.markedForDeletionIds.map { Set($0) }
             hydratedGroups.append(AssetGroup(
                 id: dto.id,
                 assets: assets,
                 keeperId: dto.keeperId ?? assets.first?.localIdentifier,
                 bestShotId: dto.bestShotId ?? assets.first?.localIdentifier,
                 fileSizes: dto.fileSizes,
-                similarityScore: dto.similarityScore
+                similarityScore: dto.similarityScore,
+                markedForDeletionIds: explicitMarked
             ))
         }
         
@@ -207,11 +209,32 @@ final class GroupedScanViewModel {
         }
     }
     
-    // MARK: - Keeper Management
+    // MARK: - Keeper & Selection Management
     
     func setKeeper(assetId: String, in groupId: String) {
         if let idx = groups.firstIndex(where: { $0.id == groupId }) {
             groups[idx].keeperId = assetId
+            // The keeper cannot be marked for deletion
+            groups[idx].markedForDeletionIds.remove(assetId)
+            Task.detached(priority: .utility) { [cat = self.category, grps = self.groups] in
+                try? await PersistentClusterStore.shared.saveClusters(grps, for: cat)
+            }
+        }
+    }
+    
+    func toggleMarkedForDeletion(assetId: String, in groupId: String) {
+        if let idx = groups.firstIndex(where: { $0.id == groupId }) {
+            // If it is the current keeper and user wants to mark it for deletion, prompt or reassign keeper
+            if groups[idx].markedForDeletionIds.contains(assetId) {
+                groups[idx].markedForDeletionIds.remove(assetId)
+            } else {
+                // If it was keeper, pick another asset as keeper if available
+                if groups[idx].keeperId == assetId {
+                    let nextKeeper = groups[idx].assets.first { $0.localIdentifier != assetId }?.localIdentifier
+                    groups[idx].keeperId = nextKeeper
+                }
+                groups[idx].markedForDeletionIds.insert(assetId)
+            }
             Task.detached(priority: .utility) { [cat = self.category, grps = self.groups] in
                 try? await PersistentClusterStore.shared.saveClusters(grps, for: cat)
             }
@@ -224,6 +247,7 @@ final class GroupedScanViewModel {
         withAnimation(.snappy) {
             for i in groups.indices.reversed() {
                 groups[i].assets.removeAll { deletedIds.contains($0.localIdentifier) }
+                groups[i].markedForDeletionIds.subtract(deletedIds)
                 if groups[i].assets.count < 2 {
                     groups.remove(at: i)
                 }
@@ -233,16 +257,17 @@ final class GroupedScanViewModel {
     
     // MARK: - Deletion Operations
     
-    func deleteNonKeepers(in group: AssetGroup) async throws {
-        let toDelete = group.nonKeepers.map(\.localIdentifier)
+    func deleteMarkedAssets(in group: AssetGroup) async throws {
+        let toDelete = Array(group.markedForDeletionIds)
+        guard !toDelete.isEmpty else { return }
         let deleted = try await PhotoLibraryService.shared.deleteAssets(localIdentifiers: toDelete)
         pruneDeletedAssets(deleted)
     }
     
-    func deleteAllNonKeepers() async throws {
-        let allNonKeepers = groups.flatMap { $0.nonKeepers.map(\.localIdentifier) }
-        guard !allNonKeepers.isEmpty else { return }
-        let deleted = try await PhotoLibraryService.shared.deleteAssets(localIdentifiers: allNonKeepers)
+    func deleteAllMarkedAssets() async throws {
+        let allMarked = groups.flatMap { Array($0.markedForDeletionIds) }
+        guard !allMarked.isEmpty else { return }
+        let deleted = try await PhotoLibraryService.shared.deleteAssets(localIdentifiers: allMarked)
         pruneDeletedAssets(deleted)
     }
 }

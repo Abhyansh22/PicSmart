@@ -33,13 +33,15 @@ final class AnalysisPipelineCoordinator {
     
     /// Sequential order of background analysis based on computational complexity:
     /// Tier 1: Large Videos (~100ms) -> Exact Duplicate Photos (~250ms)
-    /// Tier 2: Duplicate Videos (~200ms)
-    /// Tier 3: Similar Photos (~2-5s, heaviest)
+    /// Tier 2: Duplicate Videos (~200ms) -> Blurred Photos (~500ms)
+    /// Tier 3: People & Faces (~1s) -> Similar Photos (~2-5s, heaviest)
     @ObservationIgnored
     private let backgroundSequence: [GalleryCategory] = [
         .largeVideos,
         .duplicatePhotos,
         .duplicateVideos,
+        .blurredPhotos,
+        .people,
         .similarPhotos
     ]
     
@@ -60,6 +62,10 @@ final class AnalysisPipelineCoordinator {
                 appModel.similarPhotosViewModel.startScanIfNeeded()
             case .largeVideos:
                 appModel.largeVideosViewModel.startLoadIfNeeded()
+            case .blurredPhotos:
+                appModel.blurredPhotosViewModel.startScanIfNeeded()
+            case .people:
+                appModel.peopleAndFacesViewModel.startScanIfNeeded()
             default:
                 break
             }
@@ -140,6 +146,10 @@ final class AnalysisPipelineCoordinator {
             return appModel.duplicatePhotosViewModel.hasCompletedScan && (appModel.counts[.duplicatePhotos] != nil || !appModel.duplicatePhotosViewModel.groups.isEmpty)
         case .duplicateVideos:
             return appModel.duplicateVideosViewModel.hasCompletedScan && (appModel.counts[.duplicateVideos] != nil || !appModel.duplicateVideosViewModel.groups.isEmpty)
+        case .blurredPhotos:
+            return appModel.blurredPhotosViewModel.hasCompletedScan && (appModel.counts[.blurredPhotos] != nil || !appModel.blurredPhotosViewModel.items.isEmpty)
+        case .people:
+            return appModel.peopleAndFacesViewModel.hasCompletedScan && (appModel.counts[.people] != nil || !appModel.peopleAndFacesViewModel.items.isEmpty)
         case .similarPhotos:
             return appModel.similarPhotosViewModel.hasCompletedScan && (appModel.counts[.similarPhotos] != nil || !appModel.similarPhotosViewModel.groups.isEmpty)
         default:
@@ -155,6 +165,10 @@ final class AnalysisPipelineCoordinator {
             await appModel.duplicatePhotosViewModel.executeScan()
         case .duplicateVideos:
             await appModel.duplicateVideosViewModel.executeScan()
+        case .blurredPhotos:
+            await appModel.blurredPhotosViewModel.executeScan()
+        case .people:
+            await appModel.peopleAndFacesViewModel.executeScan()
         case .similarPhotos:
             await appModel.similarPhotosViewModel.executeScan()
         default:

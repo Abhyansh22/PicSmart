@@ -95,6 +95,10 @@ struct HomeView: View {
                     GroupedAssetGridView(category: category)
                 } else if category == .largeVideos {
                     LargeVideosView()
+                } else if category == .blurredPhotos {
+                    BlurredPhotosView()
+                } else if category == .people {
+                    PeopleAndFacesView()
                 } else {
                     MediaGridView(category: category)
                 }

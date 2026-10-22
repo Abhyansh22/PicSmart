@@ -9,9 +9,9 @@ import Foundation
 struct LaplacianKernel: Sendable {
     /// Computes the statistical variance of the Laplacian second derivative on a thumbnail.
     /// Higher variance indicates sharp focus and clear edges; low variance indicates blur.
-    static func computeSharpnessVariance(from image: CGImage) -> Double {
-        let width = 32
-        let height = 32
+    nonisolated static func computeSharpnessVariance(from image: CGImage, dimension: Int = 32) -> Double {
+        let width = dimension
+        let height = dimension
         guard let matrix = MatrixDownsampler.downsampleToGrayscale(image: image, targetWidth: width, targetHeight: height) else {
             return 0.0
         }

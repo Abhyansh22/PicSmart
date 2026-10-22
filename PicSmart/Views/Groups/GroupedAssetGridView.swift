@@ -76,10 +76,19 @@ struct GroupedAssetGridView: View {
                                     onKeeperChanged: { newKeeper in
                                         viewModel.setKeeper(assetId: newKeeper, in: group.id)
                                     },
+                                    onToggleMarked: { assetId in
+                                        viewModel.toggleMarkedForDeletion(assetId: assetId, in: group.id)
+                                    },
                                     onDeleteGroup: {
                                         Task {
-                                            let toDelete = group.nonKeepers.map(\.localIdentifier)
+                                            let toDelete = Array(group.markedForDeletionIds)
+                                            guard !toDelete.isEmpty else { return }
                                             try? await appModel.deleteAssets(localIdentifiers: toDelete, categoryTitle: category.title)
+                                        }
+                                    },
+                                    onDeleteSingleAsset: { assetId in
+                                        Task {
+                                            try? await appModel.deleteAssets(localIdentifiers: [assetId], categoryTitle: category.title)
                                         }
                                     }
                                 )
@@ -116,18 +125,18 @@ struct GroupedAssetGridView: View {
             guard !Task.isCancelled else { return }
             viewModel.startScanIfNeeded()
         }
-        .alert("Clean All \(category.title)?", isPresented: $showingDeleteConfirmation) {
+        .alert("Clean All Marked \(category.title)?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete \(viewModel.totalRedundantCount) Items", role: .destructive) {
                 Task {
                     isCleaning = true
-                    let allNonKeepers = viewModel.groups.flatMap { $0.nonKeepers.map(\.localIdentifier) }
-                    try? await appModel.deleteAssets(localIdentifiers: allNonKeepers, categoryTitle: category.title)
+                    let allMarked = viewModel.groups.flatMap { Array($0.markedForDeletionIds) }
+                    try? await appModel.deleteAssets(localIdentifiers: allMarked, categoryTitle: category.title)
                     isCleaning = false
                 }
             }
         } message: {
-            Text("This will keep your chosen keeper for each group and move the remaining \(viewModel.totalRedundantCount) duplicate items to Recently Deleted.")
+            Text("This will move the \(viewModel.totalRedundantCount) marked photos to Recently Deleted while keeping all unmarked and keeper photos safe.")
         }
     }
     

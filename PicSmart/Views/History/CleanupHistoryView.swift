@@ -157,6 +157,30 @@ struct CleanupHistoryView: View {
                     Spacer()
                 }
             }
+            
+            Divider()
+            
+            // Revert / Restore action
+            HStack {
+                Text("Made a mistake?")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                
+                Spacer()
+                
+                Button {
+                    if let url = URL(string: "photos-redirect://") {
+                        UIApplication.shared.open(url)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                        Text("Recover in Apple Photos")
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.blue)
+                }
+            }
         }
         .padding(14)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))

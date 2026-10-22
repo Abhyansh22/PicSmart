@@ -9,7 +9,7 @@ import Foundation
 struct DifferenceHash: Sendable {
     /// Computes a 64-bit horizontal gradient difference hash (dHash) from a 9x8 grayscale image.
     /// 8 rows x 8 horizontal transitions = 64 bits stored in a single UInt64 register.
-    static func compute(from image: CGImage) -> (hash: UInt64, luma: UInt8)? {
+    nonisolated static func compute(from image: CGImage) -> (hash: UInt64, luma: UInt8)? {
         guard let matrix = MatrixDownsampler.downsampleToGrayscale(image: image, targetWidth: 9, targetHeight: 8) else {
             return nil
         }

@@ -14,6 +14,7 @@ final class PersistentAssetCluster {
     var assetIdentifiers: [String]
     var keeperIdentifier: String?
     var bestShotIdentifier: String?
+    var markedForDeletionIdentifiers: [String]?
     var similarityScore: Float
     var fileSizesJSON: Data?
     var updatedAt: Date
@@ -24,6 +25,7 @@ final class PersistentAssetCluster {
         assetIdentifiers: [String],
         keeperIdentifier: String? = nil,
         bestShotIdentifier: String? = nil,
+        markedForDeletionIdentifiers: [String]? = nil,
         similarityScore: Float = 0.85,
         fileSizes: [String: Int64] = [:]
     ) {
@@ -32,6 +34,7 @@ final class PersistentAssetCluster {
         self.assetIdentifiers = assetIdentifiers
         self.keeperIdentifier = keeperIdentifier
         self.bestShotIdentifier = bestShotIdentifier
+        self.markedForDeletionIdentifiers = markedForDeletionIdentifiers
         self.similarityScore = similarityScore
         self.fileSizesJSON = try? JSONEncoder().encode(fileSizes)
         self.updatedAt = Date()

@@ -125,14 +125,6 @@ final class MediaCollectionViewModel {
             self.progressMessage = nil
             self.onScanCompleted?()
             
-        case .favorites:
-            let result = PhotoLibraryService.shared.fetchFavoritesCursor()
-            self.cursor = FetchResultCollection(fetchResult: result)
-            self.isLoading = false
-            self.hasLoaded = true
-            self.progressMessage = nil
-            self.onScanCompleted?()
-            
         case .people:
             let result = PhotoLibraryService.shared.fetchPeopleAndPortraitsCursor()
             self.cursor = FetchResultCollection(fetchResult: result)
@@ -187,12 +179,6 @@ final class MediaCollectionViewModel {
                 self.cursor = FetchResultCollection(fetchResult: result)
                 self.hasLoaded = true
             }
-        case .favorites:
-            let result = PhotoLibraryService.shared.fetchFavoritesCursor()
-            withAnimation(.snappy) {
-                self.cursor = FetchResultCollection(fetchResult: result)
-                self.hasLoaded = true
-            }
         case .people:
             let result = PhotoLibraryService.shared.fetchPeopleAndPortraitsCursor()
             withAnimation(.snappy) {
@@ -241,9 +227,6 @@ final class MediaCollectionViewModel {
                 self.cursor = FetchResultCollection(fetchResult: result)
             } else if category == .videos {
                 let result = PhotoLibraryService.shared.fetchVideosCursor()
-                self.cursor = FetchResultCollection(fetchResult: result)
-            } else if category == .favorites {
-                let result = PhotoLibraryService.shared.fetchFavoritesCursor()
                 self.cursor = FetchResultCollection(fetchResult: result)
             } else if category == .people {
                 let result = PhotoLibraryService.shared.fetchPeopleAndPortraitsCursor()

@@ -12,6 +12,7 @@ struct PersistedGroupDTO: Sendable {
     let assetIds: [String]
     let keeperId: String?
     let bestShotId: String?
+    let markedForDeletionIds: [String]?
     let fileSizes: [String: Int64]
     let similarityScore: Float
 }
@@ -56,6 +57,7 @@ actor PersistentClusterStore {
                 assetIdentifiers: group.assets.map(\.localIdentifier),
                 keeperIdentifier: group.keeperId,
                 bestShotIdentifier: group.bestShotId,
+                markedForDeletionIdentifiers: Array(group.markedForDeletionIds),
                 similarityScore: group.similarityScore ?? 0.85,
                 fileSizes: group.fileSizes
             )
@@ -81,6 +83,7 @@ actor PersistentClusterStore {
                 assetIds: cluster.assetIdentifiers,
                 keeperId: cluster.keeperIdentifier,
                 bestShotId: cluster.bestShotIdentifier,
+                markedForDeletionIds: cluster.markedForDeletionIdentifiers,
                 fileSizes: cluster.fileSizes,
                 similarityScore: cluster.similarityScore
             )
