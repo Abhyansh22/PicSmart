@@ -87,6 +87,38 @@ final class PhotoLibraryService: NSObject {
         return PHAsset.fetchAssets(with: .video, options: options).count
     }
     
+    nonisolated func fetchFavoritesCursor() -> PHFetchResult<PHAsset> {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "isFavorite == YES")
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        return PHAsset.fetchAssets(with: options)
+    }
+    
+    nonisolated func fetchFavoritesCount() -> Int {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "isFavorite == YES")
+        return PHAsset.fetchAssets(with: options).count
+    }
+    
+    nonisolated func fetchPeopleAndPortraitsCursor() -> PHFetchResult<PHAsset> {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(
+            format: "(mediaSubtypes & %d) != 0",
+            PHAssetMediaSubtype.photoDepthEffect.rawValue
+        )
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        return PHAsset.fetchAssets(with: .image, options: options)
+    }
+    
+    nonisolated func fetchPeopleAndPortraitsCount() -> Int {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(
+            format: "(mediaSubtypes & %d) != 0",
+            PHAssetMediaSubtype.photoDepthEffect.rawValue
+        )
+        return PHAsset.fetchAssets(with: .image, options: options).count
+    }
+    
     // MARK: - Safe Deletion
     
     func deleteAssets(localIdentifiers: [String]) async throws -> Set<String> {

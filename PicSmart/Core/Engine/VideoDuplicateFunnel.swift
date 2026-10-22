@@ -7,6 +7,7 @@ import Photos
 import AVFoundation
 import CryptoKit
 import Foundation
+import QuartzCore
 
 struct VideoDuplicateFunnel: Sendable {
     /// Runs the 3-stage exact duplicate video funnel:
@@ -55,8 +56,10 @@ struct VideoDuplicateFunnel: Sendable {
         var sizeBuckets = [Int64: [PHAsset]]()
         var assetFileSizes = [String: Int64]()
         var processed = 0
+        var lastProgressTime = CACurrentMediaTime()
         
         for group in metaCandidates {
+            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicateVideos)
             for asset in group {
                 if Task.isCancelled { return [] }
                 autoreleasepool {
@@ -67,8 +70,9 @@ struct VideoDuplicateFunnel: Sendable {
                     }
                 }
                 processed += 1
-                if processed % 10 == 0 || processed == totalCandidates {
-                    await Task.yield()
+                let now = CACurrentMediaTime()
+                if now - lastProgressTime >= 0.15 || processed == totalCandidates {
+                    lastProgressTime = now
                     progressHandler?(AnalysisProgress(completed: processed, total: totalCandidates, stage: "Comparing video storage sizes (\(processed)/\(totalCandidates))…"))
                 }
             }
@@ -84,6 +88,7 @@ struct VideoDuplicateFunnel: Sendable {
         
         for candidateList in sizeCandidates {
             if Task.isCancelled { break }
+            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicateVideos)
             
             var keyframeToAssets = [String: [PHAsset]]()
             for asset in candidateList {

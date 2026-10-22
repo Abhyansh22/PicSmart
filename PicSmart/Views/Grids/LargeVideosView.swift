@@ -8,8 +8,12 @@ import Photos
 
 struct LargeVideosView: View {
     @Environment(AppSettings.self) private var settings
-    @State private var viewModel = MediaCollectionViewModel(category: .largeVideos)
+    @Environment(AppModel.self) private var appModel
     @State private var selectedAsset: PHAsset?
+    
+    private var viewModel: MediaCollectionViewModel {
+        appModel.largeVideosViewModel
+    }
     
     private let columns = [
         GridItem(.flexible(), spacing: 2),
@@ -22,16 +26,16 @@ struct LargeVideosView: View {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
-            if viewModel.isLoading && viewModel.largeVideoAssets.isEmpty {
+            if viewModel.sortedLargeVideoAssets.isEmpty && !viewModel.hasLoaded {
                 ScanningProgressView(
                     category: .largeVideos,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.progressMessage,
+                    statusMessage: viewModel.progressMessage ?? "Scanning large videos…",
                     onCancel: {
                         viewModel.cancel()
                     }
                 )
-            } else if viewModel.largeVideoAssets.isEmpty {
+            } else if viewModel.sortedLargeVideoAssets.isEmpty {
                 ContentUnavailableView(
                     "No Large Videos Found",
                     systemImage: GalleryCategory.largeVideos.iconName,
@@ -42,7 +46,7 @@ struct LargeVideosView: View {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         // Summary Bar
                         HStack {
-                            Text("\(viewModel.largeVideoAssets.count) items")
+                            Text("\(viewModel.sortedLargeVideoAssets.count) items")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             
@@ -52,7 +56,7 @@ struct LargeVideosView: View {
                             
                             Spacer()
                             
-                            let totalBytes = viewModel.fileSizes.values.reduce(0, +)
+                            let totalBytes = viewModel.sortedLargeVideoAssets.reduce(0) { $0 + (viewModel.fileSizes[$1.localIdentifier] ?? 0) }
                             if totalBytes > 0 {
                                 Text("Total: \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))")
                                     .font(.caption.weight(.medium))
@@ -66,7 +70,7 @@ struct LargeVideosView: View {
                         .padding(.top, 8)
                         
                         LazyVGrid(columns: columns, spacing: 2) {
-                            ForEach(Array(viewModel.largeVideoAssets.enumerated()), id: \.element.localIdentifier) { index, asset in
+                            ForEach(Array(viewModel.sortedLargeVideoAssets.enumerated()), id: \.element.localIdentifier) { index, asset in
                                 let sizeText = viewModel.fileSizes[asset.localIdentifier].map {
                                     ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
                                 }
@@ -86,17 +90,25 @@ struct LargeVideosView: View {
                     }
                 }
                 .refreshable {
-                    viewModel.load()
+                    await viewModel.refresh()
                 }
             }
         }
         .navigationTitle("Large Videos")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            AnalysisPipelineCoordinator.shared.elevatePriority(for: .largeVideos, in: appModel)
             viewModel.onAppear()
+            viewModel.startLoadIfNeeded()
         }
         .onDisappear {
+            AnalysisPipelineCoordinator.shared.releasePriority(for: .largeVideos)
             viewModel.onDisappear()
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.startLoadIfNeeded()
         }
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)

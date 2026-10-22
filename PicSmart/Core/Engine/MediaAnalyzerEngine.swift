@@ -40,7 +40,7 @@ actor MediaAnalyzerEngine {
         let initialCached = self.videoSizeCache
         
         return AsyncStream { continuation in
-            Task.detached(priority: .userInitiated) {
+            Task.detached(priority: .utility) {
                 let options = PHFetchOptions()
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
                 let fetchResult = PHAsset.fetchAssets(with: .video, options: options)
@@ -55,13 +55,13 @@ actor MediaAnalyzerEngine {
                 var items: [(asset: PHAsset, size: Int64)] = []
                 var sizeMap = initialCached
                 var processed = 0
+                var lastYieldTime = CACurrentMediaTime()
                 
-                fetchResult.enumerateObjects { asset, _, stop in
-                    if Task.isCancelled {
-                        stop.pointee = true
-                        return
-                    }
+                for index in 0..<total {
+                    if Task.isCancelled { break }
+                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .largeVideos)
                     
+                    let asset = fetchResult.object(at: index)
                     let size: Int64
                     if let cached = sizeMap[asset.localIdentifier] {
                         size = cached
@@ -77,8 +77,10 @@ actor MediaAnalyzerEngine {
                     }
                     processed += 1
                     
-                    // Yield progressive update every batchYieldInterval items
-                    if processed % batchYieldInterval == 0 || processed == total {
+                    // Area 3: Time-throttled progressive yields (every 150ms) rather than per-item batching
+                    let now = CACurrentMediaTime()
+                    if now - lastYieldTime >= 0.15 || processed == total {
+                        lastYieldTime = now
                         let sortedSnapshot = items.sorted { $0.size > $1.size }.map(\.asset)
                         let progress = AnalysisProgress(
                             completed: processed,
@@ -101,19 +103,19 @@ actor MediaAnalyzerEngine {
     
     // MARK: - Category Scanners
     
-    func scanDuplicatePhotos(
+    nonisolated func scanDuplicatePhotos(
         progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil
     ) async -> [AssetGroup] {
         await ExactDuplicateFunnel.scan(progressHandler: progressHandler)
     }
     
-    func scanDuplicateVideos(
+    nonisolated func scanDuplicateVideos(
         progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil
     ) async -> [AssetGroup] {
         await VideoDuplicateFunnel.scan(progressHandler: progressHandler)
     }
     
-    func scanSimilarPhotos(
+    nonisolated func scanSimilarPhotos(
         progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil
     ) async -> [AssetGroup] {
         await SimilarPhotosFunnel.scan(progressHandler: progressHandler)

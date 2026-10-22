@@ -5,15 +5,36 @@
 
 import SwiftUI
 
-enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case screenshots
-    case videos
-    case duplicatePhotos
-    case similarPhotos
-    case duplicateVideos
-    case largeVideos
+enum CategorySection: String, CaseIterable, Identifiable {
+    case cleanUp = "Clean Up Recommendations"
+    case organize = "Organize & Review"
     
     var id: String { rawValue }
+}
+
+enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
+    // Clean Up Section
+    case similarPhotos
+    case duplicatePhotos
+    case largeVideos
+    case duplicateVideos
+    
+    // Organize & Review Section
+    case favorites
+    case people
+    case screenshots
+    case videos
+    
+    var id: String { rawValue }
+    
+    var section: CategorySection {
+        switch self {
+        case .similarPhotos, .duplicatePhotos, .largeVideos, .duplicateVideos:
+            return .cleanUp
+        case .favorites, .people, .screenshots, .videos:
+            return .organize
+        }
+    }
     
     var title: String {
         switch self {
@@ -23,6 +44,8 @@ enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .similarPhotos: return "Similar Photos"
         case .duplicateVideos: return "Duplicate Videos"
         case .largeVideos: return "Large Videos"
+        case .favorites: return "Favorites"
+        case .people: return "People & Faces"
         }
     }
     
@@ -34,6 +57,8 @@ enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .similarPhotos: return "Visually resembling shots"
         case .duplicateVideos: return "Exact video duplicates"
         case .largeVideos: return "Heavy storage consumers"
+        case .favorites: return "Starred photos & videos"
+        case .people: return "Portraits & face shots"
         }
     }
     
@@ -45,6 +70,8 @@ enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .similarPhotos: return "photo.stack.fill"
         case .duplicateVideos: return "film.stack.fill"
         case .largeVideos: return "arrow.down.circle.fill"
+        case .favorites: return "heart.fill"
+        case .people: return "person.2.fill"
         }
     }
     
@@ -56,6 +83,8 @@ enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .similarPhotos: return Color(red: 0.95, green: 0.30, blue: 0.50)
         case .duplicateVideos: return Color(red: 0.35, green: 0.45, blue: 0.95)
         case .largeVideos: return Color(red: 0.92, green: 0.26, blue: 0.26)
+        case .favorites: return Color(red: 1.0, green: 0.25, blue: 0.45)
+        case .people: return Color(red: 0.15, green: 0.70, blue: 0.75)
         }
     }
     
@@ -63,7 +92,7 @@ enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
         switch self {
         case .duplicatePhotos, .similarPhotos, .duplicateVideos:
             return true
-        case .screenshots, .videos, .largeVideos:
+        case .screenshots, .videos, .largeVideos, .favorites, .people:
             return false
         }
     }

@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppSettings.self) private var settings
+    @State private var showingOnboardingTour = false
     
     private var sliderBinding: Binding<Double> {
         Binding(
@@ -105,6 +106,19 @@ struct SettingsView: View {
                 }
                 
                 Section {
+                    Button {
+                        showingOnboardingTour = true
+                    } label: {
+                        HStack {
+                            Label("View Feature Tour & Tips", systemImage: "sparkles")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    
                     HStack {
                         Text("App Version")
                         Spacer()
@@ -114,6 +128,9 @@ struct SettingsView: View {
                 } header: {
                     Text("About PicSmart")
                 }
+            }
+            .sheet(isPresented: $showingOnboardingTour) {
+                OnboardingView()
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

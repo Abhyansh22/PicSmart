@@ -8,8 +8,12 @@ import Photos
 
 struct MediaGridView: View {
     let category: GalleryCategory
-    @State private var viewModel: MediaCollectionViewModel
+    @Environment(AppModel.self) private var appModel
     @State private var selectedAsset: PHAsset?
+    
+    private var viewModel: MediaCollectionViewModel {
+        appModel.mediaViewModel(for: category)
+    }
     
     private let columns = [
         GridItem(.flexible(), spacing: 2),
@@ -17,25 +21,18 @@ struct MediaGridView: View {
         GridItem(.flexible(), spacing: 2)
     ]
     
-    init(category: GalleryCategory) {
-        self.category = category
-        _viewModel = State(wrappedValue: MediaCollectionViewModel(category: category))
-    }
-    
     var body: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
-            if viewModel.isLoading && viewModel.totalCount == 0 {
+            if viewModel.totalCount == 0 && !viewModel.hasLoaded {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)
-                    if let msg = viewModel.progressMessage {
-                        Text(msg)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(viewModel.progressMessage ?? "Loading \(category.title.lowercased())…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             } else if viewModel.totalCount == 0 {
                 ContentUnavailableView(
@@ -73,7 +70,7 @@ struct MediaGridView: View {
                     }
                 }
                 .refreshable {
-                    viewModel.load()
+                    await viewModel.refresh()
                 }
             }
         }
@@ -84,6 +81,11 @@ struct MediaGridView: View {
         }
         .onDisappear {
             viewModel.onDisappear()
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.startLoadIfNeeded()
         }
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)

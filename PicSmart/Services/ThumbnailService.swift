@@ -18,25 +18,29 @@ final class ThumbnailService {
     
     // MARK: - Fast Scanning Thumbnail
     
-    /// Requests a fast, local-only 32x32 thumbnail for matrix downsampling and hashing.
-    /// Runs synchronously inside background tasks without blocking the UI's caching image manager.
-    nonisolated func requestFastAnalysisThumbnail(for asset: PHAsset, targetSize: CGSize = CGSize(width: 32, height: 32)) -> CGImage? {
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
-        options.isNetworkAccessAllowed = false
-        options.isSynchronous = true
-        options.resizeMode = .fast
-        
-        var resultImage: CGImage?
-        Self.analysisImageManager.requestImage(
-            for: asset,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: options
-        ) { uiImage, _ in
-            resultImage = uiImage?.cgImage
+    /// Requests a fast, local-only 32x32 thumbnail for matrix downsampling and hashing asynchronously.
+    /// Runs with isSynchronous = false to prevent saturating PhotoKit IPC queues.
+    nonisolated func requestFastAnalysisThumbnail(for asset: PHAsset, targetSize: CGSize = CGSize(width: 32, height: 32)) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .fastFormat
+            options.isNetworkAccessAllowed = false
+            options.isSynchronous = false
+            options.resizeMode = .fast
+            
+            var didResume = false
+            Self.analysisImageManager.requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: .aspectFill,
+                options: options
+            ) { uiImage, _ in
+                if !didResume {
+                    didResume = true
+                    continuation.resume(returning: uiImage?.cgImage)
+                }
+            }
         }
-        return resultImage
     }
     
     // MARK: - UI Grid Thumbnail
@@ -61,22 +65,67 @@ final class ThumbnailService {
         }
     }
     
-    func requestFullImage(for asset: PHAsset) async -> UIImage? {
-        await withCheckedContinuation { continuation in
+    // MARK: - Progressive High-Resolution Image Loading
+    
+    /// Requests a full-resolution asset with progressive two-tier loading and protection against the degraded image trap.
+    /// 1. Immediately renders an instant medium-sized preview (~520px) if onPreview is provided so the screen is never blank.
+    /// 2. Asynchronously requests the true full-resolution asset, waiting for the non-degraded callback before resuming.
+    func requestFullImage(
+        for asset: PHAsset,
+        onPreview: (@Sendable (UIImage) -> Void)? = nil
+    ) async -> UIImage? {
+        // Tier 1: Instant ~520px preview thumbnail
+        if let onPreview {
+            let previewOptions = PHImageRequestOptions()
+            previewOptions.deliveryMode = .fastFormat
+            previewOptions.isNetworkAccessAllowed = true
+            previewOptions.resizeMode = .fast
+            
+            _ = uiImageManager.requestImage(
+                for: asset,
+                targetSize: CGSize(width: 520, height: 520),
+                contentMode: .aspectFit,
+                options: previewOptions
+            ) { previewImage, _ in
+                if let previewImage {
+                    onPreview(previewImage)
+                }
+            }
+        }
+        
+        // Tier 2: True full-resolution image with degraded callback guard
+        return await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
             options.isNetworkAccessAllowed = true
+            options.resizeMode = .exact
             
-            var resumed = false
+            var temporaryImage: UIImage?
+            var didResume = false
+            
             self.uiImageManager.requestImage(
                 for: asset,
                 targetSize: PHImageManagerMaximumSize,
                 contentMode: .aspectFit,
                 options: options
-            ) { image, _ in
-                if !resumed {
-                    resumed = true
-                    continuation.resume(returning: image)
+            ) { image, info in
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                let isCancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                let error = info?[PHImageErrorKey] as? Error
+                
+                // If degraded and no error, offer as temporary preview and wait for the true high-res callback
+                if isDegraded && error == nil && !isCancelled {
+                    if let image {
+                        temporaryImage = image
+                        onPreview?(image)
+                    }
+                    return // Wait for the high-res callback
+                }
+                
+                if !didResume {
+                    didResume = true
+                    // Return final high-res image, or fallback to temporary image if available
+                    continuation.resume(returning: image ?? temporaryImage)
                 }
             }
         }

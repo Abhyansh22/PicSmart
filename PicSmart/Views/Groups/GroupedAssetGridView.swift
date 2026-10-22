@@ -8,13 +8,12 @@ import Photos
 
 struct GroupedAssetGridView: View {
     let category: GalleryCategory
-    @State private var viewModel: GroupedScanViewModel
+    @Environment(AppModel.self) private var appModel
     @State private var showingDeleteConfirmation = false
     @State private var isCleaning = false
     
-    init(category: GalleryCategory) {
-        self.category = category
-        _viewModel = State(wrappedValue: GroupedScanViewModel(category: category))
+    private var viewModel: GroupedScanViewModel {
+        appModel.groupedViewModel(for: category)
     }
     
     var body: some View {
@@ -22,11 +21,11 @@ struct GroupedAssetGridView: View {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
-            if viewModel.isScanning && viewModel.groups.isEmpty {
+            if viewModel.groups.isEmpty && !viewModel.hasCompletedScan {
                 ScanningProgressView(
                     category: category,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.statusMessage,
+                    statusMessage: viewModel.statusMessage ?? "Preparing analysis…",
                     onCancel: {
                         viewModel.cancel()
                     }
@@ -59,15 +58,28 @@ struct GroupedAssetGridView: View {
                         
                         // Groups List
                         LazyVStack(spacing: 12) {
-                            ForEach($viewModel.groups) { $group in
+                            ForEach(viewModel.groups) { group in
                                 GroupCardView(
-                                    group: $group,
+                                    group: Binding(
+                                        get: {
+                                            if let idx = viewModel.groups.firstIndex(where: { $0.id == group.id }) {
+                                                return viewModel.groups[idx]
+                                            }
+                                            return group
+                                        },
+                                        set: { newGroup in
+                                            if let idx = viewModel.groups.firstIndex(where: { $0.id == group.id }) {
+                                                viewModel.groups[idx] = newGroup
+                                            }
+                                        }
+                                    ),
                                     onKeeperChanged: { newKeeper in
                                         viewModel.setKeeper(assetId: newKeeper, in: group.id)
                                     },
                                     onDeleteGroup: {
                                         Task {
-                                            try? await viewModel.deleteNonKeepers(in: group)
+                                            let toDelete = group.nonKeepers.map(\.localIdentifier)
+                                            try? await appModel.deleteAssets(localIdentifiers: toDelete, categoryTitle: category.title)
                                         }
                                     }
                                 )
@@ -78,7 +90,7 @@ struct GroupedAssetGridView: View {
                     }
                 }
                 .refreshable {
-                    viewModel.startScan()
+                    await viewModel.refresh()
                 }
             }
             
@@ -90,17 +102,27 @@ struct GroupedAssetGridView: View {
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            AnalysisPipelineCoordinator.shared.elevatePriority(for: category, in: appModel)
             viewModel.onAppear()
+            viewModel.startScanIfNeeded()
         }
         .onDisappear {
+            AnalysisPipelineCoordinator.shared.releasePriority(for: category)
             viewModel.onDisappear()
+        }
+        .task {
+            // Defer scan start by 350ms to allow UINavigationController push transition to settle cleanly
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.startScanIfNeeded()
         }
         .alert("Clean All \(category.title)?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete \(viewModel.totalRedundantCount) Items", role: .destructive) {
                 Task {
                     isCleaning = true
-                    try? await viewModel.deleteAllNonKeepers()
+                    let allNonKeepers = viewModel.groups.flatMap { $0.nonKeepers.map(\.localIdentifier) }
+                    try? await appModel.deleteAssets(localIdentifiers: allNonKeepers, categoryTitle: category.title)
                     isCleaning = false
                 }
             }

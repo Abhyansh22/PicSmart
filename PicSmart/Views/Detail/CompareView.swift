@@ -5,6 +5,7 @@
 
 import SwiftUI
 import Photos
+import TipKit
 
 struct CompareView: View {
     @Binding var group: AssetGroup
@@ -16,17 +17,41 @@ struct CompareView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // Context Tip
+                TipView(BestShotTip())
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                
                 // Main photo preview
                 TabView(selection: $selectedIndex) {
                     ForEach(Array(group.assets.enumerated()), id: \.element.localIdentifier) { index, asset in
-                        VStack {
-                            ThumbnailView(
-                                asset: asset,
-                                isKeeper: asset.localIdentifier == group.keeperId,
-                                isBestShot: asset.localIdentifier == group.bestShotId
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                            .padding()
+                        VStack(spacing: 12) {
+                            ZStack(alignment: .topTrailing) {
+                                HighResolutionAssetImage(asset: asset, allowZoom: true)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                
+                                HStack(spacing: 8) {
+                                    if asset.localIdentifier == group.bestShotId {
+                                        Label("Best Shot", systemImage: "sparkles")
+                                            .font(.caption.weight(.semibold))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(.ultraThinMaterial, in: Capsule())
+                                            .foregroundStyle(.yellow)
+                                    }
+                                    if asset.localIdentifier == group.keeperId {
+                                        Label("Keeper", systemImage: "checkmark.circle.fill")
+                                            .font(.caption.weight(.semibold))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(Color.blue, in: Capsule())
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                                .padding(16)
+                            }
+                            .padding(.horizontal)
                             
                             HStack(spacing: 16) {
                                 Label(asset.formattedDimensions, systemImage: "aspectratio")
@@ -36,6 +61,7 @@ struct CompareView: View {
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .padding(.bottom, 8)
                         }
                         .tag(index)
                     }

@@ -11,9 +11,8 @@ struct FullScreenAssetView: View {
     let asset: PHAsset
     @Environment(\.dismiss) private var dismiss
     
-    @State private var fullImage: UIImage?
     @State private var player: AVPlayer?
-    @State private var isLoading = true
+    @State private var isVideoLoading = true
     
     var body: some View {
         NavigationStack {
@@ -26,19 +25,12 @@ struct FullScreenAssetView: View {
                             .ignoresSafeArea()
                             .onAppear { p.play() }
                             .onDisappear { p.pause() }
-                    } else if isLoading {
+                    } else if isVideoLoading {
                         ProgressView()
                             .tint(.white)
                     }
                 } else {
-                    if let image = fullImage {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                    } else if isLoading {
-                        ProgressView()
-                            .tint(.white)
-                    }
+                    HighResolutionAssetImage(asset: asset, allowZoom: true)
                 }
             }
             .navigationTitle(asset.creationDate?.formatted(date: .abbreviated, time: .shortened) ?? "")
@@ -70,30 +62,26 @@ struct FullScreenAssetView: View {
             .toolbarBackground(.black.opacity(0.8), for: .navigationBar, .bottomBar)
             .toolbarColorScheme(.dark, for: .navigationBar, .bottomBar)
             .task {
-                await loadAsset()
+                if asset.mediaType == .video {
+                    await loadVideo()
+                }
             }
         }
     }
     
-    private func loadAsset() async {
-        isLoading = true
-        if asset.mediaType == .video {
-            let options = PHVideoRequestOptions()
-            options.deliveryMode = .highQualityFormat
-            options.isNetworkAccessAllowed = true
-            
-            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                if let urlAsset = avAsset as? AVURLAsset {
-                    Task { @MainActor in
-                        self.player = AVPlayer(url: urlAsset.url)
-                        self.isLoading = false
-                    }
+    private func loadVideo() async {
+        isVideoLoading = true
+        let options = PHVideoRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        
+        PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+            if let urlAsset = avAsset as? AVURLAsset {
+                Task { @MainActor in
+                    self.player = AVPlayer(url: urlAsset.url)
+                    self.isVideoLoading = false
                 }
             }
-        } else {
-            let img = await ThumbnailService.shared.requestFullImage(for: asset)
-            self.fullImage = img
-            self.isLoading = false
         }
     }
 }

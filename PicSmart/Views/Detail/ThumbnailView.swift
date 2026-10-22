@@ -56,25 +56,32 @@ struct ThumbnailView: View {
                     
                     Spacer()
                     
-                    HStack {
+                    HStack(spacing: 4) {
                         if asset.mediaType == .video {
                             Image(systemName: "play.fill")
-                                .font(.system(size: 9))
+                                .font(.system(size: 8))
                                 .foregroundStyle(.white)
                             if let dur = asset.formattedDuration {
                                 Text(dur)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: 10, weight: .medium))
                                     .foregroundStyle(.white)
                             }
-                        } else if let badge = badgeText {
+                        }
+                        
+                        if let badge = badgeText {
+                            if asset.mediaType == .video {
+                                Text("·")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
                             Text(badge)
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                     }
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 5))
                 }
                 .padding(6)
             }

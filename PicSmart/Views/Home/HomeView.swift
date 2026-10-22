@@ -9,9 +9,11 @@ import Photos
 struct HomeView: View {
     @Environment(PhotoLibraryService.self) private var photoService
     @Environment(AppSettings.self) private var settings
-    @State private var viewModel = HomeViewModel()
+    @Environment(AppModel.self) private var appModel
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
     @State private var navigationPath = NavigationPath()
     @State private var showingSettings = false
+    @State private var showingOnboarding = false
     
     private let columns = [
         GridItem(.flexible(), spacing: 14),
@@ -21,11 +23,9 @@ struct HomeView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Header Subtitle
-                    Text("Intelligent multi-stage gallery analysis, duplicate detection, and storage optimization.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 22) {
+                    // Reclaimed Storage & Trash Quick Banner
+                    storageHeaderBanner
                         .padding(.horizontal, 16)
                     
                     // Limited permission banner if needed
@@ -34,20 +34,57 @@ struct HomeView: View {
                             .padding(.horizontal, 16)
                     }
                     
-                    // 6 Categories Grid
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(GalleryCategory.allCases) { category in
-                            NavigationLink(value: category) {
-                                CategoryCardView(
-                                    category: category,
-                                    count: viewModel.counts[category]
-                                )
-                                .contentShape(RoundedRectangle(cornerRadius: 18))
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                    // Section 1: Clean Up Recommendations
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(.blue)
+                            Text("Clean Up Recommendations")
+                                .font(.headline.weight(.semibold))
                         }
+                        .padding(.horizontal, 16)
+                        
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(GalleryCategory.allCases.filter { $0.section == .cleanUp }) { category in
+                                NavigationLink(value: category) {
+                                    CategoryCardView(
+                                        category: category,
+                                        count: appModel.badgeCount(for: category),
+                                        isScanning: appModel.isScanning(for: category)
+                                    )
+                                    .contentShape(RoundedRectangle(cornerRadius: 18))
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
+                        .padding(.horizontal, 16)
                     }
-                    .padding(.horizontal, 16)
+                    
+                    // Section 2: Organize & Review
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "square.grid.2x2")
+                                .foregroundStyle(.purple)
+                            Text("Organize & Review")
+                                .font(.headline.weight(.semibold))
+                        }
+                        .padding(.horizontal, 16)
+                        
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(GalleryCategory.allCases.filter { $0.section == .organize }) { category in
+                                NavigationLink(value: category) {
+                                    CategoryCardView(
+                                        category: category,
+                                        count: appModel.badgeCount(for: category),
+                                        isScanning: appModel.isScanning(for: category)
+                                    )
+                                    .contentShape(RoundedRectangle(cornerRadius: 18))
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
                 }
                 .padding(.vertical, 16)
             }
@@ -62,6 +99,11 @@ struct HomeView: View {
                     MediaGridView(category: category)
                 }
             }
+            .navigationDestination(for: String.self) { destination in
+                if destination == "cleanupHistory" {
+                    CleanupHistoryView()
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -74,29 +116,73 @@ struct HomeView: View {
                 }
             }
             .refreshable {
-                viewModel.refreshCounts()
+                appModel.refreshCounts()
             }
         }
         .sheet(isPresented: $showingSettings, onDismiss: {
-            viewModel.refreshCounts()
+            appModel.refreshCounts()
         }) {
             SettingsView()
         }
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingView()
+        }
         .onChange(of: settings.largeVideoThresholdMB) { _, _ in
-            if viewModel.isViewActive {
-                viewModel.refreshCounts()
-            }
+            appModel.refreshCounts()
         }
         .onAppear {
-            viewModel.onAppear()
+            if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {
+                appModel.onPhotoAccessGranted()
+            }
+            if !hasCompletedOnboarding {
+                showingOnboarding = true
+            }
+            appModel.refreshCounts()
             handleCommandLineArguments()
-        }
-        .onDisappear {
-            viewModel.onDisappear()
         }
         .onOpenURL { url in
             handleDeepLink(url)
         }
+    }
+    
+    private var storageHeaderBanner: some View {
+        NavigationLink(value: "cleanupHistory") {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "trash.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
+                
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Cleanup Activity & Trash")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    
+                    if appModel.lifetimeBytesSaved > 0 {
+                        Text("\(ByteCountFormatter.string(fromByteCount: appModel.lifetimeBytesSaved, countStyle: .file)) recovered to date")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("Track storage recovered & review trash")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var limitedAccessBanner: some View {

@@ -14,26 +14,32 @@ extension PHAsset: @retroactive Identifiable {
 
 nonisolated extension PHAsset {
     /// Extracts the file size in bytes from the primary PHAssetResource.
-    /// Uses KVC value(forKey: "fileSize") safely.
+    /// Checks all video resources to accurately reflect the maximum file size.
     var primaryResourceFileSize: Int64? {
         let resources = PHAssetResource.assetResources(for: self)
-        let primaryResource = resources.first { res in
+        let matchingResources = resources.filter { res in
             if mediaType == .video {
                 return res.type == .video || res.type == .fullSizeVideo
             } else {
                 return res.type == .photo || res.type == .fullSizePhoto
             }
-        } ?? resources.first
-        
-        guard let resource = primaryResource else { return nil }
-        
-        let key = "fileSize"
-        guard resource.responds(to: NSSelectorFromString(key)),
-              let number = resource.value(forKey: key) as? NSNumber else {
-            return nil
         }
-        let size = number.int64Value
-        return size > 0 ? size : nil
+        
+        let targetResources = matchingResources.isEmpty ? resources : matchingResources
+        let key = "fileSize"
+        
+        var maxSize: Int64 = 0
+        for resource in targetResources {
+            if resource.responds(to: NSSelectorFromString(key)),
+               let number = resource.value(forKey: key) as? NSNumber {
+                let bytes = number.int64Value
+                if bytes > maxSize {
+                    maxSize = bytes
+                }
+            }
+        }
+        
+        return maxSize > 0 ? maxSize : nil
     }
     
     var formattedFileSize: String? {

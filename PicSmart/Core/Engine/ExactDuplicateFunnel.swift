@@ -6,6 +6,7 @@
 import Photos
 import CryptoKit
 import Foundation
+import QuartzCore
 
 struct ExactDuplicateFunnel: Sendable {
     /// Runs the 3-stage exact duplicate photo funnel:
@@ -56,8 +57,10 @@ struct ExactDuplicateFunnel: Sendable {
         var sizeBuckets = [Int64: [PHAsset]]()
         var assetFileSizes = [String: Int64]()
         var processedCount = 0
+        var lastSizeProgressTime = CACurrentMediaTime()
         
         for group in candidateGroups {
+            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicatePhotos)
             for asset in group {
                 if Task.isCancelled { return [] }
                 autoreleasepool {
@@ -68,8 +71,9 @@ struct ExactDuplicateFunnel: Sendable {
                     }
                 }
                 processedCount += 1
-                if processedCount % 20 == 0 || processedCount == totalCandidates {
-                    await Task.yield()
+                let now = CACurrentMediaTime()
+                if now - lastSizeProgressTime >= 0.15 || processedCount == totalCandidates {
+                    lastSizeProgressTime = now
                     progressHandler?(AnalysisProgress(completed: processedCount, total: totalCandidates, stage: "Analyzing file byte sizes (\(processedCount)/\(totalCandidates))…"))
                 }
             }
@@ -85,15 +89,19 @@ struct ExactDuplicateFunnel: Sendable {
         
         for candidateList in sizeCandidates {
             if Task.isCancelled { break }
+            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicatePhotos)
             
             var hashToAssets = [String: [PHAsset]]()
             for asset in candidateList {
-                autoreleasepool {
-                    if let cgImage = ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 32, height: 32)),
-                       let matrix = MatrixDownsampler.downsampleToGrayscale(image: cgImage, targetWidth: 32, targetHeight: 32) {
-                        let digest = SHA256.hash(data: matrix.pixels)
-                        let hashString = digest.map { String(format: "%02x", $0) }.joined()
-                        hashToAssets[hashString, default: []].append(asset)
+                if Task.isCancelled { break }
+                let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 32, height: 32))
+                if let cgImage {
+                    autoreleasepool {
+                        if let matrix = MatrixDownsampler.downsampleToGrayscale(image: cgImage, targetWidth: 32, targetHeight: 32) {
+                            let digest = SHA256.hash(data: matrix.pixels)
+                            let hashString = digest.map { String(format: "%02x", $0) }.joined()
+                            hashToAssets[hashString, default: []].append(asset)
+                        }
                     }
                 }
             }

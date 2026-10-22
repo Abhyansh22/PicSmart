@@ -6,6 +6,7 @@
 import Photos
 import Vision
 import Foundation
+import QuartzCore
 
 struct SimilarPhotosFunnel: Sendable {
     private struct CandidateSignature: Hashable, Sendable {
@@ -25,6 +26,11 @@ struct SimilarPhotosFunnel: Sendable {
         static func == (lhs: CandidateSignature, rhs: CandidateSignature) -> Bool {
             lhs.id == rhs.id
         }
+    }
+    
+    private struct FingerprintResult: Sendable {
+        let signature: CandidateSignature?
+        let dto: VisualSignatureDTO?
     }
     
     /// Runs the hybrid Matrix-to-Vision similar photo funnel:
@@ -62,12 +68,8 @@ struct SimilarPhotosFunnel: Sendable {
         var signatures: [CandidateSignature] = []
         signatures.reserveCapacity(eligibleAssets.count)
         
-        var toSave: [VisualSignatureDTO] = []
-        var completed = 0
-        
+        var missingAssets: [PHAsset] = []
         for asset in eligibleAssets {
-            if Task.isCancelled { return [] }
-            
             if let cached = cachedStore[asset.localIdentifier] {
                 signatures.append(CandidateSignature(
                     id: asset.localIdentifier,
@@ -80,40 +82,67 @@ struct SimilarPhotosFunnel: Sendable {
                     observation: cached.observation
                 ))
             } else {
-                autoreleasepool {
-                    if let cgImage = ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 32, height: 32)),
-                       let hashData = DifferenceHash.compute(from: cgImage) {
-                        let sharpness = LaplacianKernel.computeSharpnessVariance(from: cgImage)
-                        
-                        let sig = CandidateSignature(
-                            id: asset.localIdentifier,
-                            asset: asset,
-                            gradientHash: hashData.hash,
-                            averageLuminance: hashData.luma,
-                            aspectBand: asset.aspectRatioBand,
-                            weekBucket: asset.creationWeekBucket,
-                            sharpnessScore: sharpness,
-                            observation: nil
-                        )
-                        signatures.append(sig)
-                        
-                        toSave.append(VisualSignatureDTO(
-                            localIdentifier: asset.localIdentifier,
-                            gradientHash: hashData.hash,
-                            averageLuminance: hashData.luma,
-                            aspectBand: asset.aspectRatioBand,
-                            creationWeekBucket: asset.creationWeekBucket,
-                            sharpnessScore: sharpness,
-                            featureData: nil
-                        ))
+                missingAssets.append(asset)
+            }
+        }
+        
+        var toSave: [VisualSignatureDTO] = []
+        let totalCount = eligibleAssets.count
+        var completedCount = signatures.count
+        var lastProgressTime = CACurrentMediaTime()
+        
+        // Initial progress event
+        progressHandler?(AnalysisProgress(
+            completed: completedCount,
+            total: totalCount,
+            stage: "Fingerprinting photos (\(completedCount)/\(totalCount))…"
+        ))
+        
+        if !missingAssets.isEmpty {
+            let workerCount = 3
+            var nextMissingIndex = 0
+            
+            await withTaskGroup(of: FingerprintResult.self) { group in
+                // 1. Prime the queue with at most 3 concurrent requests (producer-consumer cap)
+                while nextMissingIndex < min(workerCount, missingAssets.count) {
+                    let asset = missingAssets[nextMissingIndex]
+                    nextMissingIndex += 1
+                    group.addTask {
+                        await computeFingerprint(for: asset)
                     }
                 }
-            }
-            
-            completed += 1
-            if completed % 25 == 0 || completed == eligibleAssets.count {
-                await Task.yield()
-                progressHandler?(AnalysisProgress(completed: completed, total: eligibleAssets.count, stage: "Fingerprinting photos (\(completed)/\(eligibleAssets.count))…"))
+                
+                // 2. Sliding window: as one finishes, collect and enqueue the next
+                while let result = await group.next() {
+                    if Task.isCancelled { break }
+                    
+                    if let sig = result.signature, let dto = result.dto {
+                        signatures.append(sig)
+                        toSave.append(dto)
+                    }
+                    completedCount += 1
+                    
+                    // Area 4: Time-throttled progress updates (every 150ms or on completion)
+                    let now = CACurrentMediaTime()
+                    if now - lastProgressTime >= 0.15 || completedCount == totalCount {
+                        lastProgressTime = now
+                        progressHandler?(AnalysisProgress(
+                            completed: completedCount,
+                            total: totalCount,
+                            stage: "Fingerprinting photos (\(completedCount)/\(totalCount))…"
+                        ))
+                    }
+                    
+                    // Sliding window enqueue
+                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .similarPhotos)
+                    if !Task.isCancelled && nextMissingIndex < missingAssets.count {
+                        let nextAsset = missingAssets[nextMissingIndex]
+                        nextMissingIndex += 1
+                        group.addTask {
+                            await computeFingerprint(for: nextAsset)
+                        }
+                    }
+                }
             }
         }
         
@@ -176,22 +205,24 @@ struct SimilarPhotosFunnel: Sendable {
         
         // Generate Vision prints only for the surviving candidates
         var printDone = 0
+        var lastPrintProgressTime = CACurrentMediaTime()
         for id in neededPrintIds {
             if Task.isCancelled { return [] }
+            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .similarPhotos)
             if let asset = assetMap[id] {
-                autoreleasepool {
-                    if let obs = generateVisionFeaturePrint(for: asset) {
-                        observations[id] = obs
-                        if let data = try? NSKeyedArchiver.archivedData(withRootObject: obs, requiringSecureCoding: true) {
-                            Task {
-                                await FeatureVectorStore.shared.updateFeatureData(for: id, data: data)
-                            }
+                if let obs = await generateVisionFeaturePrint(for: asset) {
+                    observations[id] = obs
+                    if let data = try? NSKeyedArchiver.archivedData(withRootObject: obs, requiringSecureCoding: true) {
+                        Task {
+                            await FeatureVectorStore.shared.updateFeatureData(for: id, data: data)
                         }
                     }
                 }
             }
             printDone += 1
-            if printDone % 10 == 0 || printDone == neededPrintIds.count {
+            let now = CACurrentMediaTime()
+            if now - lastPrintProgressTime >= 0.15 || printDone == neededPrintIds.count {
+                lastPrintProgressTime = now
                 progressHandler?(AnalysisProgress(completed: printDone, total: neededPrintIds.count, stage: "Neural verification (\(printDone)/\(neededPrintIds.count))…"))
             }
         }
@@ -251,14 +282,52 @@ struct SimilarPhotosFunnel: Sendable {
         return finalGroups
     }
     
-    private static func generateVisionFeaturePrint(for asset: PHAsset) -> VNFeaturePrintObservation? {
-        guard let cgImage = ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 256, height: 256)) else {
+    private static func computeFingerprint(for asset: PHAsset) async -> FingerprintResult {
+        guard let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 32, height: 32)) else {
+            return FingerprintResult(signature: nil, dto: nil)
+        }
+        
+        return autoreleasepool {
+            guard let hashData = DifferenceHash.compute(from: cgImage) else {
+                return FingerprintResult(signature: nil, dto: nil)
+            }
+            let sharpness = LaplacianKernel.computeSharpnessVariance(from: cgImage)
+            
+            let sig = CandidateSignature(
+                id: asset.localIdentifier,
+                asset: asset,
+                gradientHash: hashData.hash,
+                averageLuminance: hashData.luma,
+                aspectBand: asset.aspectRatioBand,
+                weekBucket: asset.creationWeekBucket,
+                sharpnessScore: sharpness,
+                observation: nil
+            )
+            
+            let dto = VisualSignatureDTO(
+                localIdentifier: asset.localIdentifier,
+                gradientHash: hashData.hash,
+                averageLuminance: hashData.luma,
+                aspectBand: asset.aspectRatioBand,
+                creationWeekBucket: asset.creationWeekBucket,
+                sharpnessScore: sharpness,
+                featureData: nil
+            )
+            
+            return FingerprintResult(signature: sig, dto: dto)
+        }
+    }
+    
+    private static func generateVisionFeaturePrint(for asset: PHAsset) async -> VNFeaturePrintObservation? {
+        guard let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 256, height: 256)) else {
             return nil
         }
-        let request = VNGenerateImageFeaturePrintRequest()
-        request.imageCropAndScaleOption = .scaleFit
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        try? handler.perform([request])
-        return request.results?.first as? VNFeaturePrintObservation
+        return autoreleasepool {
+            let request = VNGenerateImageFeaturePrintRequest()
+            request.imageCropAndScaleOption = .scaleFit
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([request])
+            return request.results?.first as? VNFeaturePrintObservation
+        }
     }
 }

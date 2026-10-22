@@ -42,6 +42,7 @@ struct RootView: View {
 
 struct PermissionRequestView: View {
     @Environment(PhotoLibraryService.self) private var photoService
+    @Environment(AppModel.self) private var appModel
     @State private var isRequesting = false
     
     var body: some View {
@@ -75,8 +76,11 @@ struct PermissionRequestView: View {
                 guard !isRequesting else { return }
                 isRequesting = true
                 Task {
-                    _ = await photoService.requestAuthorization()
+                    let status = await photoService.requestAuthorization()
                     isRequesting = false
+                    if status == .authorized || status == .limited {
+                        appModel.onPhotoAccessGranted()
+                    }
                 }
             } label: {
                 HStack(spacing: 8) {

@@ -64,7 +64,11 @@ struct VisualSignatureDTO: Sendable {
 actor FeatureVectorStore {
     static let shared: FeatureVectorStore = {
         do {
-            let schema = Schema([CachedVisualSignature.self])
+            let schema = Schema([
+                CachedVisualSignature.self,
+                PersistentAssetCluster.self,
+                CleanupSessionRecord.self
+            ])
             let config = ModelConfiguration("PicSmartVisualStore", isStoredInMemoryOnly: false)
             let container = try ModelContainer(for: schema, configurations: [config])
             return FeatureVectorStore(modelContainer: container)
