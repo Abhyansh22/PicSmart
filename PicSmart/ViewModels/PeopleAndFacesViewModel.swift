@@ -9,7 +9,7 @@ import Combine
 import Observation
 
 enum PeopleFilter: String, CaseIterable, Identifiable {
-    case all = "All People"
+    case all = "All Faces"
     case portraits = "Portraits"
     case groups = "Groups"
     case blinks = "Blinks / Closed"
@@ -29,6 +29,7 @@ enum PeopleFilter: String, CaseIterable, Identifiable {
 @Observable
 @MainActor
 final class PeopleAndFacesViewModel {
+    var personClusters: [PersonCluster] = []
     var items: [PersonPhotoItem] = []
     var selectedFilter: PeopleFilter = .all
     var isScanning: Bool = false
@@ -102,9 +103,25 @@ final class PeopleAndFacesViewModel {
         }
         
         if !Task.isCancelled {
-            self.items = result
+            self.personClusters = result.personClusters
+            self.items = result.allPhotoItems
             self.hasCompletedScan = true
             self.onScanCompleted?()
+            
+            // Persist to SwiftData
+            let clustersToSave = result.personClusters
+            Task.detached(priority: .utility) {
+                let dtos = clustersToSave.map {
+                    PersistedPersonDTO(
+                        id: $0.id,
+                        name: $0.name,
+                        avatarAssetId: $0.avatarAsset.localIdentifier,
+                        avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
+                        memberAssetIds: $0.assets.map(\.localIdentifier)
+                    )
+                }
+                try? await PersistentClusterStore.shared.savePersonDTOs(dtos)
+            }
         }
         self.isScanning = false
         self.progress = nil
@@ -119,10 +136,25 @@ final class PeopleAndFacesViewModel {
         let result = await PeopleAnalysisEngine.shared.scan()
         guard !Task.isCancelled else { return }
         withAnimation(.snappy) {
-            self.items = result
+            self.personClusters = result.personClusters
+            self.items = result.allPhotoItems
             self.hasCompletedScan = true
         }
         self.onScanCompleted?()
+        
+        let clustersToSave = result.personClusters
+        Task.detached(priority: .utility) {
+            let dtos = clustersToSave.map {
+                PersistedPersonDTO(
+                    id: $0.id,
+                    name: $0.name,
+                    avatarAssetId: $0.avatarAsset.localIdentifier,
+                    avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
+                    memberAssetIds: $0.assets.map(\.localIdentifier)
+                )
+            }
+            try? await PersistentClusterStore.shared.savePersonDTOs(dtos)
+        }
     }
     
     func cancel() {
@@ -132,6 +164,51 @@ final class PeopleAndFacesViewModel {
         hasCompletedScan = true
         progress = nil
         statusMessage = nil
+    }
+    
+    // MARK: - Cold Launch Hydration
+    
+    func hydrate(from dtos: [PersistedPersonDTO]) {
+        guard personClusters.isEmpty && !hasCompletedScan else { return }
+        let allIds = dtos.flatMap { $0.memberAssetIds + [$0.avatarAssetId] }
+        guard !allIds.isEmpty else { return }
+        
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: allIds, options: nil)
+        var map = [String: PHAsset]()
+        fetch.enumerateObjects { asset, _, _ in
+            map[asset.localIdentifier] = asset
+        }
+        
+        var hydrated: [PersonCluster] = []
+        for dto in dtos {
+            guard let avatar = map[dto.avatarAssetId] else { continue }
+            let members = dto.memberAssetIds.compactMap { map[$0] }
+            guard !members.isEmpty else { continue }
+            hydrated.append(PersonCluster(
+                id: dto.id,
+                name: dto.name,
+                avatarAsset: avatar,
+                avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
+                assets: members
+            ))
+        }
+        
+        if !hydrated.isEmpty {
+            self.personClusters = hydrated
+            self.hasCompletedScan = true
+            self.onScanCompleted?()
+        }
+    }
+    
+    // MARK: - Rename Person
+    
+    func renamePerson(id: String, newName: String) {
+        if let idx = personClusters.firstIndex(where: { $0.id == id }) {
+            personClusters[idx].name = newName
+            Task.detached(priority: .utility) {
+                try? await PersistentClusterStore.shared.updatePersonName(id: id, newName: newName)
+            }
+        }
     }
     
     // MARK: - Filtered Items
@@ -177,7 +254,7 @@ final class PeopleAndFacesViewModel {
     }
     
     var totalCount: Int {
-        items.count
+        personClusters.count > 0 ? personClusters.count : items.count
     }
     
     // MARK: - Pruning
@@ -186,6 +263,13 @@ final class PeopleAndFacesViewModel {
         withAnimation(.snappy) {
             items.removeAll { deletedIds.contains($0.id) }
             selectedIds.subtract(deletedIds)
+            
+            for i in personClusters.indices.reversed() {
+                personClusters[i].assets.removeAll { deletedIds.contains($0.localIdentifier) }
+                if personClusters[i].assets.isEmpty {
+                    personClusters.remove(at: i)
+                }
+            }
         }
     }
 }

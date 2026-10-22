@@ -29,10 +29,10 @@ struct PeopleAndFacesView: View {
                 ScanningProgressView(
                     category: .people,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.statusMessage ?? "Detecting people…",
+                    statusMessage: viewModel.statusMessage ?? "Clustering people & faces…",
                     onCancel: { viewModel.cancel() }
                 )
-            } else if viewModel.items.isEmpty {
+            } else if viewModel.items.isEmpty && viewModel.personClusters.isEmpty {
                 ContentUnavailableView(
                     "No People Found",
                     systemImage: "person.2.slash",
@@ -40,13 +40,21 @@ struct PeopleAndFacesView: View {
                 )
             } else {
                 ScrollView {
-                    VStack(spacing: 12) {
-                        // Filter Pills Bar
+                    VStack(spacing: 16) {
+                        // Section 1: Google Photos-style People Avatars Carousel
+                        if !viewModel.personClusters.isEmpty {
+                            peopleAvatarsSection
+                                .padding(.top, 12)
+                        }
+                        
+                        Divider()
+                            .padding(.horizontal, 16)
+                        
+                        // Section 2: Filter Pills Bar
                         filterPillsBar
                             .padding(.horizontal, 16)
-                            .padding(.top, 10)
                         
-                        // Summary & Controls Header
+                        // Section 3: Summary & Controls Header
                         summaryCard
                             .padding(.horizontal, 16)
                         
@@ -56,7 +64,7 @@ struct PeopleAndFacesView: View {
                                 systemImage: viewModel.selectedFilter.iconName,
                                 description: Text("No photos found in \(viewModel.selectedFilter.rawValue).")
                             )
-                            .padding(.top, 40)
+                            .padding(.top, 30)
                         } else {
                             // Media Grid
                             LazyVGrid(columns: columns, spacing: 6) {
@@ -180,7 +188,68 @@ struct PeopleAndFacesView: View {
         }
     }
     
-    // MARK: - Filter Pills Bar
+    // MARK: - Section 1: Google Photos People Carousel
+    
+    private var peopleAvatarsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("People & Groups")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                
+                Text("\(viewModel.personClusters.count)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(Array(viewModel.personClusters.indices), id: \.self) { idx in
+                        let cluster = viewModel.personClusters[idx]
+                        
+                        NavigationLink {
+                            PersonDetailView(
+                                person: Binding(
+                                    get: { viewModel.personClusters[idx] },
+                                    set: { viewModel.personClusters[idx] = $0 }
+                                ),
+                                onRename: { newName in
+                                    viewModel.renamePerson(id: cluster.id, newName: newName)
+                                }
+                            )
+                        } label: {
+                            VStack(spacing: 8) {
+                                FaceAvatarView(
+                                    asset: cluster.avatarAsset,
+                                    faceBoundingBox: cluster.avatarFaceBoundingBox,
+                                    size: 76
+                                )
+                                
+                                VStack(spacing: 2) {
+                                    Text(cluster.displayName)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: 85)
+                                    
+                                    Text("\(cluster.count) photo\(cluster.count == 1 ? "" : "s")")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+    
+    // MARK: - Section 2: Filter Pills Bar
     
     private var filterPillsBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {

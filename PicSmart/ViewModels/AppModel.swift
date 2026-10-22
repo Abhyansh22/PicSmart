@@ -58,6 +58,7 @@ final class AppModel {
             let dups = try? await PersistentClusterStore.shared.loadClusters(for: .duplicatePhotos)
             let sim = try? await PersistentClusterStore.shared.loadClusters(for: .similarPhotos)
             let dupVid = try? await PersistentClusterStore.shared.loadClusters(for: .duplicateVideos)
+            let persons = try? await PersistentClusterStore.shared.loadPersonDTOs()
             let lifetime = (try? await PersistentClusterStore.shared.totalLifetimeBytesSaved()) ?? 0
             
             if let dups, !dups.isEmpty {
@@ -68,6 +69,9 @@ final class AppModel {
             }
             if let dupVid, !dupVid.isEmpty {
                 self.duplicateVideosViewModel.hydrate(from: dupVid)
+            }
+            if let persons, !persons.isEmpty {
+                self.peopleAndFacesViewModel.hydrate(from: persons)
             }
             self.lifetimeBytesSaved = lifetime
             self.refreshCounts()

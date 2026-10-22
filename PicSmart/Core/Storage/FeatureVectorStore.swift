@@ -67,7 +67,8 @@ actor FeatureVectorStore {
             let schema = Schema([
                 CachedVisualSignature.self,
                 PersistentAssetCluster.self,
-                CleanupSessionRecord.self
+                CleanupSessionRecord.self,
+                PersistentPersonCluster.self
             ])
             let config = ModelConfiguration("PicSmartVisualStore", isStoredInMemoryOnly: false)
             let container = try ModelContainer(for: schema, configurations: [config])

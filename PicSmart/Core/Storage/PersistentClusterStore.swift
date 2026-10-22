@@ -17,6 +17,14 @@ struct PersistedGroupDTO: Sendable {
     let similarityScore: Float
 }
 
+struct PersistedPersonDTO: Sendable {
+    let id: String
+    let name: String?
+    let avatarAssetId: String
+    let avatarFaceBoundingBox: CGRect
+    let memberAssetIds: [String]
+}
+
 @ModelActor
 actor PersistentClusterStore {
     static let shared: PersistentClusterStore = {
@@ -24,7 +32,8 @@ actor PersistentClusterStore {
             let schema = Schema([
                 CachedVisualSignature.self,
                 PersistentAssetCluster.self,
-                CleanupSessionRecord.self
+                CleanupSessionRecord.self,
+                PersistentPersonCluster.self
             ])
             let config = ModelConfiguration("PicSmartVisualStore", isStoredInMemoryOnly: false)
             let container = try ModelContainer(for: schema, configurations: [config])
@@ -157,5 +166,58 @@ actor PersistentClusterStore {
         let descriptor = FetchDescriptor<CleanupSessionRecord>()
         let records = try modelContext.fetch(descriptor)
         return records.reduce(0) { $0 + $1.bytesSaved }
+    }
+    
+    // MARK: - Person & Face Clusters
+    
+    func savePersonDTOs(_ persons: [PersistedPersonDTO]) throws {
+        // Fetch existing to preserve user custom names
+        let descriptor = FetchDescriptor<PersistentPersonCluster>()
+        let existing = try modelContext.fetch(descriptor)
+        var nameMap = [String: String]()
+        for p in existing {
+            if let n = p.name, !n.isEmpty {
+                nameMap[p.id] = n
+            }
+            modelContext.delete(p)
+        }
+        
+        for dto in persons {
+            let cluster = PersistentPersonCluster(
+                id: dto.id,
+                name: nameMap[dto.id] ?? dto.name,
+                avatarAssetIdentifier: dto.avatarAssetId,
+                avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
+                memberAssetIdentifiers: dto.memberAssetIds
+            )
+            modelContext.insert(cluster)
+        }
+        try modelContext.save()
+    }
+    
+    func loadPersonDTOs() throws -> [PersistedPersonDTO] {
+        let descriptor = FetchDescriptor<PersistentPersonCluster>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        let records = try modelContext.fetch(descriptor)
+        return records.map {
+            PersistedPersonDTO(
+                id: $0.id,
+                name: $0.name,
+                avatarAssetId: $0.avatarAssetIdentifier,
+                avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
+                memberAssetIds: $0.memberAssetIdentifiers
+            )
+        }
+    }
+    
+    func updatePersonName(id: String, newName: String) throws {
+        let descriptor = FetchDescriptor<PersistentPersonCluster>(
+            predicate: #Predicate { $0.id == id }
+        )
+        if let person = try modelContext.fetch(descriptor).first {
+            person.name = newName.trimmingCharacters(in: .whitespaces)
+            try modelContext.save()
+        }
     }
 }
