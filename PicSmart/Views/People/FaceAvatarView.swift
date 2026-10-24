@@ -15,6 +15,28 @@ struct FaceAvatarView: View {
     
     @State private var croppedFaceImage: UIImage?
     
+    init(
+        asset: PHAsset,
+        faceBoundingBox: CGRect,
+        size: CGFloat = 74,
+        isHeroCard: Bool = false,
+        cornerRadius: CGFloat = 18
+    ) {
+        self.asset = asset
+        self.faceBoundingBox = faceBoundingBox
+        self.size = size
+        self.isHeroCard = isHeroCard
+        self.cornerRadius = cornerRadius
+        
+        // Fast synchronous memory cache lookup to eliminate initial flicker during scrolling
+        let key = FaceAvatarCache.shared.key(
+            assetIdentifier: asset.localIdentifier,
+            boundingBox: faceBoundingBox,
+            size: size
+        )
+        _croppedFaceImage = State(initialValue: FaceAvatarCache.shared.get(key: key))
+    }
+    
     var body: some View {
         ZStack {
             if let image = croppedFaceImage {
@@ -63,43 +85,42 @@ struct FaceAvatarView: View {
         }
         .shadow(color: .black.opacity(0.04), radius: 3, x: 0, y: 1)
         .task(id: asset.localIdentifier) {
-            await loadCroppedFace()
+            await loadAvatar()
         }
     }
     
-    private func loadCroppedFace() async {
-        guard let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(
-            for: asset,
-            targetSize: CGSize(width: size * 2.5, height: size * 2.5)
-        ) else {
+    private func loadAvatar() async {
+        let key = FaceAvatarCache.shared.key(
+            assetIdentifier: asset.localIdentifier,
+            boundingBox: faceBoundingBox,
+            size: size
+        )
+        
+        // If already cached, ensure state is set and return
+        if let cached = FaceAvatarCache.shared.get(key: key) {
+            if croppedFaceImage == nil {
+                croppedFaceImage = cached
+            }
             return
         }
         
-        let imgW = CGFloat(cgImage.width)
-        let imgH = CGFloat(cgImage.height)
+        // Two-Tier progressive loading:
+        // Tier 1: onPreview renders an instant medium preview (~400px source) so the view is never blank.
+        // Tier 2: high-fidelity face-proportional crop (~1000-1400px source) renders tack-sharp on Retina.
+        let highResAvatar = await ThumbnailService.shared.requestFaceAvatar(
+            for: asset,
+            faceBoundingBox: faceBoundingBox,
+            displaySize: size
+        ) { preview in
+            if croppedFaceImage == nil {
+                croppedFaceImage = preview
+            }
+        }
         
-        // Vision boundingBox has (0,0) at bottom-left
-        let x = faceBoundingBox.origin.x * imgW
-        let y = (1.0 - faceBoundingBox.origin.y - faceBoundingBox.size.height) * imgH
-        let w = faceBoundingBox.size.width * imgW
-        let h = faceBoundingBox.size.height * imgH
-        
-        // Expand to a balanced square portrait chip (include hair, ears, chin)
-        let side = max(w, h) * 1.45
-        let centerX = x + w / 2
-        let centerY = y + h / 2
-        
-        let cropX = max(0, min(imgW - side, centerX - side / 2))
-        let cropY = max(0, min(imgH - side, centerY - side / 2))
-        let cropRect = CGRect(
-            x: cropX,
-            y: cropY,
-            width: min(side, imgW - cropX),
-            height: min(side, imgH - cropY)
-        )
-        
-        if let cropped = cgImage.cropping(to: cropRect) {
-            self.croppedFaceImage = UIImage(cgImage: cropped)
+        if let highResAvatar, !Task.isCancelled {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                croppedFaceImage = highResAvatar
+            }
         }
     }
 }
