@@ -160,8 +160,8 @@ actor PeopleAnalysisEngine {
                 }
             }
             
-            // Distance threshold for same human identity (~0.38)
-            if bestDistance <= 0.38, let matchIdx = bestIndex {
+            // Distance threshold for same human identity on 1024px face crops (~0.32)
+            if bestDistance <= 0.32, let matchIdx = bestIndex {
                 if !rawClusters[matchIdx].memberAssets.contains(where: { $0.localIdentifier == face.asset.localIdentifier }) {
                     rawClusters[matchIdx].memberAssets.append(face.asset)
                 }
@@ -195,7 +195,10 @@ actor PeopleAnalysisEngine {
     }
     
     private func extractFacesAndPrints(for asset: PHAsset) async -> AssetFaceResult {
-        guard let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 320, height: 320)) else {
+        // Use high-fidelity thumbnail: `.highQualityFormat` + `.exact` resizeMode for accurate
+        // face landmark geometry and feature print generation. `.fastFormat` artifacts degrade
+        // landmark point accuracy and cause false blink/closed-eye positives.
+        guard let cgImage = await ThumbnailService.shared.requestAnalysisThumbnail(for: asset, targetSize: CGSize(width: 1024, height: 1024)) else {
             return AssetFaceResult(item: nil, faces: [])
         }
         
@@ -210,14 +213,29 @@ actor PeopleAnalysisEngine {
                     return AssetFaceResult(item: nil, faces: [])
                 }
                 
-                // Detect Blinks
+                // Detect Blinks — strict dual-eye AND logic to avoid false positives on squinting,
+                // side profiles, downward gaze, and bright-light partial closures.
                 var hasBlink = false
                 let landmarksRequest = VNDetectFaceLandmarksRequest()
                 try? handler.perform([landmarksRequest])
                 let landmarkResults = landmarksRequest.results ?? []
                 for face in landmarkResults {
+                    // Guard 1: faceCaptureQuality — skip low-quality face observations (side profiles, tiny faces)
+                    // Quality is nil for old Vision revisions, treat nil as passing to avoid masking real blinks.
+                    if let quality = face.faceCaptureQuality, quality < 0.35 { continue }
+
+                    // Guard 2: Face must be large enough relative to the image for reliable landmark geometry.
+                    // Faces smaller than 8% of image area produce noisy landmark point distributions.
+                    let faceAreaFraction = face.boundingBox.width * face.boundingBox.height
+                    guard faceAreaFraction >= 0.08 else { continue }
+
                     if let left = face.landmarks?.leftEye, let right = face.landmarks?.rightEye {
-                        if eyeOpenRatio(left) < 0.14 || eyeOpenRatio(right) < 0.14 {
+                        let leftRatio = eyeOpenRatio(left)
+                        let rightRatio = eyeOpenRatio(right)
+                        // Both eyes must be below threshold simultaneously.
+                        // Single-eye check causes massive false positives on profiles and oblique angles.
+                        // Threshold lowered to 0.12 (was 0.14) to require a more pronounced closure.
+                        if leftRatio < 0.12 && rightRatio < 0.12 {
                             hasBlink = true
                             break
                         }
@@ -245,6 +263,8 @@ actor PeopleAnalysisEngine {
                         height: min(imgH - max(0, y - marginY), h + 2 * marginY)
                     )
                     
+                    // Reject tiny background faces (< 80px) to prevent noise & false positive identity merges
+                    guard cropRect.width >= 80 && cropRect.height >= 80 else { continue }
                     guard let faceChip = cgImage.cropping(to: cropRect) else { continue }
                     
                     let printRequest = VNGenerateImageFeaturePrintRequest()

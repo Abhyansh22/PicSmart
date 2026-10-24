@@ -80,6 +80,16 @@ final class MediaCollectionViewModel {
         }
     }
     
+    /// Incremental insertion for a newly discovered large video
+    func appendLargeVideo(asset: PHAsset, size: Int64) {
+        guard !fileSizes.keys.contains(asset.localIdentifier) else { return }
+        fileSizes[asset.localIdentifier] = size
+        sortedLargeVideoAssets.append(asset)
+        sortedLargeVideoAssets.sort { (fileSizes[$0.localIdentifier] ?? 0) > (fileSizes[$1.localIdentifier] ?? 0) }
+        hasLoaded = true
+        onScanCompleted?()
+    }
+    
     func load() {
         guard !isLoading else { return }
         loadTask?.cancel()

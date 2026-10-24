@@ -34,14 +34,14 @@ final class AnalysisPipelineCoordinator {
     /// Sequential order of background analysis based on computational complexity:
     /// Tier 1: Large Videos (~100ms) -> Exact Duplicate Photos (~250ms)
     /// Tier 2: Duplicate Videos (~200ms) -> Blurred Photos (~500ms)
-    /// Tier 3: People & Faces (~1s) -> Similar Photos (~2-5s, heaviest)
+    /// Tier 3: Similar Photos (~2-5s, heaviest)
+    /// (Note: People & Faces is decoupled and scheduled ONLY during idle phase due to 1024px Vision load)
     @ObservationIgnored
     private let backgroundSequence: [GalleryCategory] = [
         .largeVideos,
         .duplicatePhotos,
         .duplicateVideos,
         .blurredPhotos,
-        .people,
         .similarPhotos
     ]
     
@@ -135,7 +135,32 @@ final class AnalysisPipelineCoordinator {
                 // 3. Execute category scan sequentially
                 await self.runCategoryScan(category, in: appModel)
             }
+            
+            // 4. Idle Phase: Heavy 1024px People & Faces analysis (lowest background priority)
+            if !Task.isCancelled {
+                await self.runIdlePeopleAndFacesScan(in: appModel)
+            }
         }
+    }
+    
+    /// Executes People & Faces analysis slowly during idle moments when all foreground categories are done.
+    private func runIdlePeopleAndFacesScan(in appModel: AppModel) async {
+        // Only run if not already completed
+        let isDone = await MainActor.run {
+            self.isCategoryCompleted(.people, in: appModel)
+        }
+        guard !isDone else { return }
+        
+        // Ensure app has been completely idle for at least 800ms before kicking off 1024px Vision work
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        
+        // Cooperative yield check
+        while await shouldYield(for: .people) {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        
+        guard !Task.isCancelled else { return }
+        await appModel.peopleAndFacesViewModel.executeScan()
     }
     
     private func isCategoryCompleted(_ category: GalleryCategory, in appModel: AppModel) -> Bool {

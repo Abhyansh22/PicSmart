@@ -149,9 +149,6 @@ struct PeopleAndFacesView: View {
                         }
                     }
                 }
-                .refreshable {
-                    await viewModel.refresh()
-                }
             }
             
             // Bottom Clean Bar

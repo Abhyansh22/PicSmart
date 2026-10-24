@@ -6,6 +6,7 @@
 import Photos
 import SwiftUI
 import Observation
+import Combine
 
 @Observable
 @MainActor
@@ -28,6 +29,10 @@ final class AppModel {
     
     @ObservationIgnored
     private var countTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var deltaSyncTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var cancellables = Set<AnyCancellable>()
     
     init() {
         duplicatePhotosViewModel.onScanCompleted = { [weak self] in
@@ -48,6 +53,15 @@ final class AppModel {
         peopleAndFacesViewModel.onScanCompleted = { [weak self] in
             self?.refreshCounts()
         }
+        
+        // Listen to system PhotoKit changes across the entire app
+        PhotoLibraryService.shared.libraryChangePublisher
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.runDeltaSync()
+            }
+            .store(in: &cancellables)
+            
         hydratePersistedClusters()
         refreshCounts()
         AnalysisPipelineCoordinator.shared.startProactiveBackgroundScan(appModel: self)
@@ -75,6 +89,7 @@ final class AppModel {
             }
             self.lifetimeBytesSaved = lifetime
             self.refreshCounts()
+            self.runDeltaSync()
         }
     }
     
@@ -100,7 +115,93 @@ final class AppModel {
         
         hydratePersistedClusters()
         refreshCounts()
+        runDeltaSync()
         AnalysisPipelineCoordinator.shared.startProactiveBackgroundScan(appModel: self, force: true)
+    }
+    
+    // MARK: - Incremental Delta Synchronization
+    
+    func runDeltaSync() {
+        deltaSyncTask?.cancel()
+        deltaSyncTask = Task {
+            let delta = await LibraryDeltaTracker.shared.checkForDeltas()
+            guard !Task.isCancelled else { return }
+            
+            // 1. Prune externally deleted assets
+            if !delta.deletedAssetIds.isEmpty {
+                self.pruneDeletedAssetsAcrossModels(delta.deletedAssetIds)
+            }
+            
+            // 2. Process newly added assets incrementally
+            if !delta.addedAssets.isEmpty {
+                await self.processAddedAssets(delta.addedAssets)
+            }
+            
+            self.refreshCounts()
+        }
+    }
+    
+    /// Prunes deleted assets across all view models and SwiftData clusters without re-scanning
+    func pruneDeletedAssetsAcrossModels(_ deleted: Set<String>) {
+        duplicatePhotosViewModel.pruneDeletedAssets(deleted)
+        duplicateVideosViewModel.pruneDeletedAssets(deleted)
+        similarPhotosViewModel.pruneDeletedAssets(deleted)
+        blurredPhotosViewModel.pruneDeletedAssets(deleted)
+        peopleAndFacesViewModel.pruneDeletedAssets(deleted)
+        largeVideosViewModel.pruneDeletedAssets(deleted)
+        screenshotsViewModel.pruneDeletedAssets(deleted)
+        videosViewModel.pruneDeletedAssets(deleted)
+        
+        Task.detached(priority: .utility) {
+            try? await PersistentClusterStore.shared.pruneDeletedAssets(deleted)
+        }
+        refreshCounts()
+    }
+    
+    /// Incremental analysis of newly added media items
+    private func processAddedAssets(_ assets: [PHAsset]) async {
+        guard !assets.isEmpty else { return }
+        
+        for asset in assets {
+            if Task.isCancelled { break }
+            
+            if asset.mediaType == .video {
+                // Check if large video
+                let size = asset.primaryResourceFileSize ?? 0
+                if size >= AppSettings.shared.largeVideoThresholdBytes {
+                    self.largeVideosViewModel.appendLargeVideo(asset: asset, size: size)
+                }
+            } else if asset.mediaType == .image {
+                // 1. Evaluate Blur immediately
+                if let blurred = await BlurredPhotosFunnel.shared.evaluateSingleAsset(asset) {
+                    self.blurredPhotosViewModel.appendItem(blurred)
+                }
+                
+                // 2. Evaluate Exact Duplicate against existing duplicate groups
+                let size = asset.primaryResourceFileSize ?? 0
+                if size > 0 {
+                    var matchedGroupIndex: Int? = nil
+                    for (idx, group) in duplicatePhotosViewModel.groups.enumerated() {
+                        if let first = group.assets.first,
+                           first.pixelWidth == asset.pixelWidth,
+                           first.pixelHeight == asset.pixelHeight,
+                           group.fileSizes[first.localIdentifier] == size {
+                            matchedGroupIndex = idx
+                            break
+                        }
+                    }
+                    if let idx = matchedGroupIndex {
+                        duplicatePhotosViewModel.groups[idx].assets.append(asset)
+                        duplicatePhotosViewModel.groups[idx].fileSizes[asset.localIdentifier] = size
+                        duplicatePhotosViewModel.groups[idx].markedForDeletionIds.insert(asset.localIdentifier)
+                        let updated = duplicatePhotosViewModel.groups
+                        Task.detached(priority: .utility) {
+                            try? await PersistentClusterStore.shared.saveClusters(updated, for: .duplicatePhotos)
+                        }
+                    }
+                }
+            }
+        }
     }
     
     // Direct reactive badge accessors so SwiftUI observes the child viewmodels directly

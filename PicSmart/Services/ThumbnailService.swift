@@ -17,9 +17,9 @@ final class ThumbnailService {
     nonisolated private static let analysisImageManager = PHImageManager()
     
     // MARK: - Fast Scanning Thumbnail
-    
-    /// Requests a fast, local-only 32x32 thumbnail for matrix downsampling and hashing asynchronously.
-    /// Runs with isSynchronous = false to prevent saturating PhotoKit IPC queues.
+
+    /// Requests a fast, local-only thumbnail for matrix downsampling and hashing asynchronously.
+    /// Uses `.fastFormat` + `.fast` resizeMode for speed-critical hash/similarity scans at small sizes.
     nonisolated func requestFastAnalysisThumbnail(for asset: PHAsset, targetSize: CGSize = CGSize(width: 32, height: 32)) async -> CGImage? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
@@ -27,7 +27,7 @@ final class ThumbnailService {
             options.isNetworkAccessAllowed = false
             options.isSynchronous = false
             options.resizeMode = .fast
-            
+
             var didResume = false
             Self.analysisImageManager.requestImage(
                 for: asset,
@@ -35,6 +35,38 @@ final class ThumbnailService {
                 contentMode: .aspectFill,
                 options: options
             ) { uiImage, _ in
+                if !didResume {
+                    didResume = true
+                    continuation.resume(returning: uiImage?.cgImage)
+                }
+            }
+        }
+    }
+
+    // MARK: - High-Fidelity Analysis Thumbnail
+
+    /// Requests a higher-fidelity thumbnail for signal-sensitive analysis (blur detection, face landmark detection).
+    /// Uses `.opportunistic` delivery + `.exact` resize to preserve edges and avoid JPEG compression artifacts
+    /// that would otherwise corrupt Laplacian/landmark measurements.
+    /// Falls back to `.fastFormat` result if PhotoKit cannot deliver `.highQualityFormat`.
+    nonisolated func requestAnalysisThumbnail(for asset: PHAsset, targetSize: CGSize) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = false
+            options.isSynchronous = false
+            options.resizeMode = .exact
+
+            var didResume = false
+            Self.analysisImageManager.requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: .aspectFit,
+                options: options
+            ) { uiImage, info in
+                // Skip degraded intermediate deliveries; wait for the final high-quality callback
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                guard !isDegraded else { return }
                 if !didResume {
                     didResume = true
                     continuation.resume(returning: uiImage?.cgImage)

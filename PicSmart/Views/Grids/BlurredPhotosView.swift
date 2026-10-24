@@ -116,9 +116,6 @@ struct BlurredPhotosView: View {
                         .padding(.bottom, 90) // space for bottom clean bar
                     }
                 }
-                .refreshable {
-                    await viewModel.refresh()
-                }
             }
             
             // Bottom Clean Bar

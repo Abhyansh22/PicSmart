@@ -89,9 +89,6 @@ struct LargeVideosView: View {
                         }
                     }
                 }
-                .refreshable {
-                    await viewModel.refresh()
-                }
             }
         }
         .navigationTitle("Large Videos")

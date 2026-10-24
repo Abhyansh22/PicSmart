@@ -31,10 +31,25 @@ final class BlurredPhotosViewModel {
         PhotoLibraryService.shared.libraryChangePublisher
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self, self.isActive else { return }
-                self.startScan()
+                guard let self else { return }
+                if self.isActive {
+                    self.startScan()
+                }
             }
             .store(in: &cancellables)
+    }
+    
+    /// Incremental insertion of a newly discovered blurred photo
+    func appendItem(_ item: BlurredPhotoItem) {
+        guard !items.contains(where: { $0.id == item.id }) else { return }
+        withAnimation(.snappy) {
+            self.items.insert(item, at: 0)
+            self.items.sort { $0.blurPercentage > $1.blurPercentage }
+            if item.blurPercentage >= 75 {
+                self.selectedIds.insert(item.id)
+            }
+        }
+        self.onScanCompleted?()
     }
     
     func onAppear() {

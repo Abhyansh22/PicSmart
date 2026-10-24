@@ -101,6 +101,17 @@ actor PersistentClusterStore {
     
     // MARK: - Deletion Pruning & Strict Cluster Dissolution
     
+    /// Returns all asset identifiers currently participating in any cluster
+    func fetchAllTrackedAssetIds() throws -> Set<String> {
+        let descriptor = FetchDescriptor<PersistentAssetCluster>()
+        let clusters = try modelContext.fetch(descriptor)
+        var set = Set<String>()
+        for c in clusters {
+            set.formUnion(c.assetIdentifiers)
+        }
+        return set
+    }
+    
     /// Prunes deleted identifiers across all SwiftData clusters.
     /// If a cluster drops below 2 photos, it is dissolved and permanently deleted from SwiftData.
     func pruneDeletedAssets(_ deletedIds: Set<String>) throws {

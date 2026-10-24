@@ -9,10 +9,27 @@ import Foundation
 struct LaplacianKernel: Sendable {
     /// Computes the statistical variance of the Laplacian second derivative on a thumbnail.
     /// Higher variance indicates sharp focus and clear edges; low variance indicates blur.
-    nonisolated static func computeSharpnessVariance(from image: CGImage, dimension: Int = 32) -> Double {
+    ///
+    /// - Parameters:
+    ///   - image: The source image to analyse. Should be a high-fidelity thumbnail (`.highQualityFormat` + `.exact`)
+    ///     for accurate blur detection. Do NOT use `.fastFormat` thumbnails — JPEG block artifacts will corrupt results.
+    ///   - dimension: The size of the grayscale matrix to downsample to before applying the kernel.
+    ///     256 is recommended for blur analysis; 32 is sufficient for hashing.
+    ///   - interpolationQuality: The CGInterpolationQuality used when downsampling to the analysis matrix.
+    ///     Use `.high` for blur detection to preserve edge frequency content. Defaults to `.medium` for hash scans.
+    nonisolated static func computeSharpnessVariance(
+        from image: CGImage,
+        dimension: Int = 32,
+        interpolationQuality: CGInterpolationQuality = .medium
+    ) -> Double {
         let width = dimension
         let height = dimension
-        guard let matrix = MatrixDownsampler.downsampleToGrayscale(image: image, targetWidth: width, targetHeight: height) else {
+        guard let matrix = MatrixDownsampler.downsampleToGrayscale(
+            image: image,
+            targetWidth: width,
+            targetHeight: height,
+            interpolationQuality: interpolationQuality
+        ) else {
             return 0.0
         }
         

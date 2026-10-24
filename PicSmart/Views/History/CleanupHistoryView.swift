@@ -51,9 +51,6 @@ struct CleanupHistoryView: View {
         .task {
             await loadHistory()
         }
-        .refreshable {
-            await loadHistory()
-        }
     }
     
     // MARK: - Hero Card

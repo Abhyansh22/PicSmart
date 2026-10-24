@@ -20,9 +20,30 @@ actor BlurredPhotosFunnel {
     static let shared = BlurredPhotosFunnel()
     
     /// Calibrated threshold for Laplacian variance below which an image is considered out-of-focus or motion-blurred.
-    private let blurThreshold: Double = 140.0
+    /// Calibrated for 256px `.highQualityFormat` + `.exact` resize thumbnails analysed with `.high` CGInterpolation.
+    /// Sharp iOS photos typically score 600–4000+; truly blurry photos fall below ~300.
+    private let blurThreshold: Double = 350.0
     
     private init() {}
+    
+    /// Evaluates a single newly added asset for incremental delta sync
+    func evaluateSingleAsset(_ asset: PHAsset) async -> BlurredPhotoItem? {
+        guard let (_, sharpness, dto) = await evaluateAssetSharpness(asset) else { return nil }
+        if let dto {
+            await FeatureVectorStore.shared.saveSignatures([dto])
+        }
+        if sharpness < blurThreshold && sharpness >= 0.0 {
+            let pct = Int(max(0, min(100, (1.0 - (sharpness / blurThreshold)) * 100)))
+            let size = asset.primaryResourceFileSize ?? 3_500_000
+            return BlurredPhotoItem(
+                asset: asset,
+                sharpnessScore: sharpness,
+                blurPercentage: pct,
+                fileSize: size
+            )
+        }
+        return nil
+    }
     
     func scan(progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil) async -> [BlurredPhotoItem] {
         let options = PHFetchOptions()
@@ -46,7 +67,7 @@ actor BlurredPhotosFunnel {
         var missingAssets: [PHAsset] = []
         
         for asset in allAssets {
-            if let cached = cachedMap[asset.localIdentifier], cached.sharpnessScore > 0 {
+            if let cached = cachedMap[asset.localIdentifier], cached.sharpnessScore >= 0.0 {
                 if cached.sharpnessScore < blurThreshold {
                     let pct = Int(max(0, min(100, (1.0 - (cached.sharpnessScore / blurThreshold)) * 100)))
                     let size = asset.primaryResourceFileSize ?? 3_500_000
@@ -92,7 +113,7 @@ actor BlurredPhotosFunnel {
                         if let dto {
                             newSignatures.append(dto)
                         }
-                        if sharpness < self.blurThreshold && sharpness > 0 {
+                        if sharpness < self.blurThreshold && sharpness >= 0.0 {
                             let pct = Int(max(0, min(100, (1.0 - (sharpness / self.blurThreshold)) * 100)))
                             let size = asset.primaryResourceFileSize ?? 3_500_000
                             evaluatedItems.append(BlurredPhotoItem(
@@ -136,14 +157,17 @@ actor BlurredPhotosFunnel {
     }
     
     private func evaluateAssetSharpness(_ asset: PHAsset) async -> (PHAsset, Double, VisualSignatureDTO?)? {
-        guard let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 64, height: 64)) else {
+        // Use high-fidelity thumbnail: `.highQualityFormat` + `.exact` resizeMode to avoid JPEG block
+        // artifacts from `.fastFormat` that corrupt Laplacian edge measurements.
+        guard let cgImage = await ThumbnailService.shared.requestAnalysisThumbnail(for: asset, targetSize: CGSize(width: 256, height: 256)) else {
             return nil
         }
-        
+
         return autoreleasepool {
-            let sharpness = LaplacianKernel.computeSharpnessVariance(from: cgImage, dimension: 64)
+            // Use `.high` interpolation quality so Laplacian measures true optical blur, not resampling smoothing
+            let sharpness = LaplacianKernel.computeSharpnessVariance(from: cgImage, dimension: 256, interpolationQuality: .high)
             let hashData = DifferenceHash.compute(from: cgImage)
-            
+
             var dto: VisualSignatureDTO? = nil
             if let hashData {
                 dto = VisualSignatureDTO(
@@ -156,7 +180,7 @@ actor BlurredPhotosFunnel {
                     featureData: nil
                 )
             }
-            
+
             return (asset, sharpness, dto)
         }
     }

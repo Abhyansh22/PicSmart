@@ -15,10 +15,21 @@ struct MatrixDownsampler: Sendable {
         let averageLuminance: UInt8
     }
     
-    /// Downsamples a CGImage to a target grayscale matrix using medium interpolation (low-pass filter).
-    static func downsampleToGrayscale(image: CGImage, targetWidth: Int = 9, targetHeight: Int = 8) -> MatrixResult? {
+    /// Downsamples a CGImage to a target grayscale matrix.
+    /// - Parameters:
+    ///   - image: Source image to downsample.
+    ///   - targetWidth: Output pixel width.
+    ///   - targetHeight: Output pixel height.
+    ///   - interpolationQuality: CGInterpolationQuality to use. Use `.high` for signal-sensitive analysis
+    ///     (e.g., blur/Laplacian) and `.medium` for fast hash/similarity scans.
+    nonisolated static func downsampleToGrayscale(
+        image: CGImage,
+        targetWidth: Int = 9,
+        targetHeight: Int = 8,
+        interpolationQuality: CGInterpolationQuality = .medium
+    ) -> MatrixResult? {
         var pixelBuffer = [UInt8](repeating: 0, count: targetWidth * targetHeight)
-        
+
         guard let context = CGContext(
             data: &pixelBuffer,
             width: targetWidth,
@@ -30,8 +41,8 @@ struct MatrixDownsampler: Sendable {
         ) else {
             return nil
         }
-        
-        context.interpolationQuality = .medium
+
+        context.interpolationQuality = interpolationQuality
         context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
         
         let sum = pixelBuffer.reduce(0) { $0 + Int($1) }

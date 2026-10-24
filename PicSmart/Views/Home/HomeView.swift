@@ -10,6 +10,7 @@ struct HomeView: View {
     @Environment(PhotoLibraryService.self) private var photoService
     @Environment(AppSettings.self) private var settings
     @Environment(AppModel.self) private var appModel
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
     @State private var navigationPath = NavigationPath()
     @State private var showingSettings = false
@@ -119,9 +120,6 @@ struct HomeView: View {
                     .accessibilityLabel("Settings")
                 }
             }
-            .refreshable {
-                appModel.refreshCounts()
-            }
         }
         .sheet(isPresented: $showingSettings, onDismiss: {
             appModel.refreshCounts()
@@ -130,6 +128,11 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showingOnboarding) {
             OnboardingView()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                appModel.runDeltaSync()
+            }
         }
         .onChange(of: settings.largeVideoThresholdMB) { _, _ in
             appModel.refreshCounts()

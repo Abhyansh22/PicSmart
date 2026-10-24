@@ -69,9 +69,6 @@ struct MediaGridView: View {
                         }
                     }
                 }
-                .refreshable {
-                    await viewModel.refresh()
-                }
             }
         }
         .navigationTitle(category.title)
