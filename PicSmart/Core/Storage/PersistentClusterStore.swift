@@ -27,6 +27,15 @@ struct PersistedPersonDTO: Sendable {
     var keyAssetId: String? = nil
 }
 
+struct FaceEmbeddingDTO: Sendable {
+    let id: String
+    let assetIdentifier: String
+    let faceIndex: Int
+    let boundingBox: CGRect
+    let captureQuality: Float
+    let embedding: [Float]
+}
+
 @ModelActor
 actor PersistentClusterStore {
     static let shared: PersistentClusterStore = {
@@ -35,7 +44,8 @@ actor PersistentClusterStore {
                 CachedVisualSignature.self,
                 PersistentAssetCluster.self,
                 CleanupSessionRecord.self,
-                PersistentPersonCluster.self
+                PersistentPersonCluster.self,
+                CachedFaceEmbedding.self
             ])
             let config = ModelConfiguration("PicSmartVisualStore", isStoredInMemoryOnly: false)
             let container = try ModelContainer(for: schema, configurations: [config])
@@ -190,26 +200,55 @@ actor PersistentClusterStore {
         var nameMap = [String: String]()
         var favMap = [String: Bool]()
         var keyMap = [String: String]()
+        
+        // Asset-overlap maps to preserve names/favorites even if cluster indices re-order
+        var assetToName = [String: String]()
+        var assetToFav = [String: Bool]()
+        var assetToKey = [String: String]()
+        
         for p in existing {
             if let n = p.name, !n.isEmpty {
                 nameMap[p.id] = n
+                for aid in p.memberAssetIdentifiers {
+                    assetToName[aid] = n
+                }
             }
             favMap[p.id] = p.isFavorite
+            if p.isFavorite {
+                for aid in p.memberAssetIdentifiers {
+                    assetToFav[aid] = true
+                }
+            }
             if let k = p.keyAssetIdentifier {
                 keyMap[p.id] = k
+                for aid in p.memberAssetIdentifiers {
+                    assetToKey[aid] = k
+                }
             }
             modelContext.delete(p)
         }
         
         for dto in persons {
+            let directName = nameMap[dto.id] ?? dto.name
+            let overlapName = dto.memberAssetIds.compactMap { assetToName[$0] }.first
+            let finalName = directName ?? overlapName
+            
+            let directFav = favMap[dto.id] ?? dto.isFavorite
+            let overlapFav = dto.memberAssetIds.contains(where: { assetToFav[$0] == true })
+            let finalFav = directFav || overlapFav
+            
+            let directKey = keyMap[dto.id] ?? dto.keyAssetId
+            let overlapKey = dto.memberAssetIds.compactMap { assetToKey[$0] }.first
+            let finalKey = directKey ?? overlapKey ?? dto.avatarAssetId
+            
             let cluster = PersistentPersonCluster(
                 id: dto.id,
-                name: nameMap[dto.id] ?? dto.name,
-                avatarAssetIdentifier: keyMap[dto.id] ?? dto.keyAssetId ?? dto.avatarAssetId,
+                name: finalName,
+                avatarAssetIdentifier: finalKey,
                 avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
                 memberAssetIdentifiers: dto.memberAssetIds,
-                isFavorite: favMap[dto.id] ?? dto.isFavorite,
-                keyAssetIdentifier: keyMap[dto.id] ?? dto.keyAssetId
+                isFavorite: finalFav,
+                keyAssetIdentifier: finalKey
             )
             modelContext.insert(cluster)
         }
@@ -262,5 +301,48 @@ actor PersistentClusterStore {
             modelContext.delete(person)
             try modelContext.save()
         }
+    }
+    
+    // MARK: - Face Embedding Cache Persistence
+    
+    func saveFaceEmbeddings(_ embeddings: [FaceEmbeddingDTO]) throws {
+        guard !embeddings.isEmpty else { return }
+        for dto in embeddings {
+            let entity = CachedFaceEmbedding(
+                id: dto.id,
+                assetIdentifier: dto.assetIdentifier,
+                faceIndex: dto.faceIndex,
+                boundingBox: dto.boundingBox,
+                captureQuality: dto.captureQuality,
+                embedding: dto.embedding
+            )
+            modelContext.insert(entity)
+        }
+        try modelContext.save()
+    }
+    
+    func loadAllFaceEmbeddings() throws -> [FaceEmbeddingDTO] {
+        let descriptor = FetchDescriptor<CachedFaceEmbedding>()
+        let records = try modelContext.fetch(descriptor)
+        return records.map {
+            FaceEmbeddingDTO(
+                id: $0.id,
+                assetIdentifier: $0.assetIdentifier,
+                faceIndex: $0.faceIndex,
+                boundingBox: $0.boundingBox,
+                captureQuality: $0.captureQuality,
+                embedding: $0.embedding
+            )
+        }
+    }
+    
+    func loadFaceEmbeddings(for assetIdentifiers: Set<String>) throws -> [String: [FaceEmbeddingDTO]] {
+        guard !assetIdentifiers.isEmpty else { return [:] }
+        let all = try loadAllFaceEmbeddings()
+        var grouped: [String: [FaceEmbeddingDTO]] = [:]
+        for item in all where assetIdentifiers.contains(item.assetIdentifier) {
+            grouped[item.assetIdentifier, default: []].append(item)
+        }
+        return grouped
     }
 }

@@ -9,15 +9,10 @@ import Photos
 import CoreGraphics
 import QuartzCore
 
-struct DetectedFacePrint: @unchecked Sendable {
-    let asset: PHAsset
-    let box: CGRect
-    let featurePrint: VNFeaturePrintObservation
-}
-
 struct AssetFaceResult: @unchecked Sendable {
     let item: PersonPhotoItem?
-    let faces: [DetectedFacePrint]
+    let faces: [BiometricFaceItem]
+    let newEmbeddings: [FaceEmbeddingDTO]
 }
 
 struct PersonCluster: Identifiable, Sendable {
@@ -71,6 +66,9 @@ actor PeopleAnalysisEngine {
     private init() {}
     
     func scan(progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil) async -> PeopleScanOutput {
+        // Prewarm Neural Engine model in background
+        FaceEmbeddingEngine.shared.prewarm()
+        
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
@@ -87,15 +85,40 @@ actor PeopleAnalysisEngine {
             allAssets.append(asset)
         }
         
+        // Load pre-existing cached face embeddings to skip redundant neural inference
+        let cachedList = (try? await PersistentClusterStore.shared.loadAllFaceEmbeddings()) ?? []
+        var cachedByAsset: [String: [FaceEmbeddingDTO]] = [:]
+        for c in cachedList {
+            cachedByAsset[c.assetIdentifier, default: []].append(c)
+        }
+        
+        // Load existing persisted person metadata (names, favorites, key photos)
+        let existingPersisted = (try? await PersistentClusterStore.shared.loadPersonDTOs()) ?? []
+        var assetToName = [String: String]()
+        var assetToFav = [String: Bool]()
+        var assetToKey = [String: String]()
+        for p in existingPersisted {
+            if let n = p.name, !n.isEmpty {
+                for aid in p.memberAssetIds { assetToName[aid] = n }
+            }
+            if p.isFavorite {
+                for aid in p.memberAssetIds { assetToFav[aid] = true }
+            }
+            if let k = p.keyAssetId {
+                for aid in p.memberAssetIds { assetToKey[aid] = k }
+            }
+        }
+        
         var photoItems: [PersonPhotoItem] = []
-        var detectedFaces: [DetectedFacePrint] = []
+        var allBiometricFaces: [BiometricFaceItem] = []
+        var newEmbeddingsToPersist: [FaceEmbeddingDTO] = []
         
         var completedCount = 0
         var lastProgressTime = CACurrentMediaTime()
         progressHandler?(AnalysisProgress(
             completed: 0,
             total: totalCount,
-            stage: "Detecting faces (0/\(totalCount))…"
+            stage: "Detecting & analyzing faces (0/\(totalCount))…"
         ))
         
         let workerCount = 3
@@ -105,8 +128,9 @@ actor PeopleAnalysisEngine {
             while nextIndex < min(workerCount, allAssets.count) {
                 let asset = allAssets[nextIndex]
                 nextIndex += 1
+                let cached = cachedByAsset[asset.localIdentifier]
                 group.addTask {
-                    await self.extractFacesAndPrints(for: asset)
+                    await self.analyzeAsset(asset: asset, cachedDTOs: cached)
                 }
             }
             
@@ -116,7 +140,8 @@ actor PeopleAnalysisEngine {
                 
                 if let item = result.item, item.faceCount > 0 {
                     photoItems.append(item)
-                    detectedFaces.append(contentsOf: result.faces)
+                    allBiometricFaces.append(contentsOf: result.faces)
+                    newEmbeddingsToPersist.append(contentsOf: result.newEmbeddings)
                 }
                 
                 let now = CACurrentMediaTime()
@@ -125,7 +150,7 @@ actor PeopleAnalysisEngine {
                     progressHandler?(AnalysisProgress(
                         completed: completedCount,
                         total: totalCount,
-                        stage: "Detecting & clustering faces (\(completedCount)/\(totalCount))…"
+                        stage: "Detecting & embedding faces (\(completedCount)/\(totalCount))…"
                     ))
                 }
                 
@@ -133,157 +158,206 @@ actor PeopleAnalysisEngine {
                 if !Task.isCancelled && nextIndex < allAssets.count {
                     let nextAsset = allAssets[nextIndex]
                     nextIndex += 1
+                    let cached = cachedByAsset[nextAsset.localIdentifier]
                     group.addTask {
-                        await self.extractFacesAndPrints(for: nextAsset)
+                        await self.analyzeAsset(asset: nextAsset, cachedDTOs: cached)
                     }
                 }
             }
         }
         
-        // Identity Clustering with greedy nearest-neighbor centroid aggregation
+        // Persist newly computed embeddings to SwiftData asynchronously
+        if !newEmbeddingsToPersist.isEmpty {
+            let toSave = newEmbeddingsToPersist
+            Task.detached(priority: .utility) {
+                try? await PersistentClusterStore.shared.saveFaceEmbeddings(toSave)
+            }
+        }
+        
+        // Identity Clustering with Accelerate Cosine DBSCAN
         progressHandler?(AnalysisProgress(
             completed: totalCount,
             total: totalCount,
-            stage: "Clustering individual identities…"
+            stage: "Clustering identities with biometric DBSCAN…"
         ))
         
-        struct RawCluster {
-            let id: String
-            let avatarAsset: PHAsset
-            let avatarBox: CGRect
-            let representativePrint: VNFeaturePrintObservation
-            var memberAssets: [PHAsset]
-        }
-        var rawClusters = [RawCluster]()
-        
-        for face in detectedFaces {
-            var bestDistance: Float = 1.0
-            var bestIndex: Int? = nil
-            
-            for (idx, cluster) in rawClusters.enumerated() {
-                var dist: Float = 1.0
-                try? cluster.representativePrint.computeDistance(&dist, to: face.featurePrint)
-                if dist < bestDistance {
-                    bestDistance = dist
-                    bestIndex = idx
-                }
-            }
-            
-            // Distance threshold for same human identity on 1024px face crops (~0.32)
-            if bestDistance <= 0.32, let matchIdx = bestIndex {
-                if !rawClusters[matchIdx].memberAssets.contains(where: { $0.localIdentifier == face.asset.localIdentifier }) {
-                    rawClusters[matchIdx].memberAssets.append(face.asset)
-                }
-            } else {
-                let clusterId = "person_\(rawClusters.count + 1)"
-                rawClusters.append(RawCluster(
-                    id: clusterId,
-                    avatarAsset: face.asset,
-                    avatarBox: face.box,
-                    representativePrint: face.featurePrint,
-                    memberAssets: [face.asset]
-                ))
-            }
-        }
-        
-        // Sort clusters by number of photos descending
-        rawClusters.sort { $0.memberAssets.count > $1.memberAssets.count }
+        // Cluster using standard MobileFaceNet cosine distance radius (0.40) and minSamples (2)
+        let dbscanOutput = DBSCANClusteringEngine.cluster(
+            faces: allBiometricFaces,
+            epsilon: 0.40,
+            minSamples: 2
+        )
         
         var finalClusters: [PersonCluster] = []
-        for c in rawClusters {
+        var clusterIndex = 1
+        
+        // 1. Convert dense clusters to PersonCluster
+        for identity in dbscanOutput.identities {
+            let memberAssets = identity.uniqueAssets
+            let memberAssetIds = memberAssets.map(\.localIdentifier)
+            
+            // Check if any photo in this cluster was previously named or favorited
+            let matchedName = memberAssetIds.compactMap { assetToName[$0] }.first
+            let matchedFav = memberAssetIds.contains(where: { assetToFav[$0] == true })
+            let matchedKey = memberAssetIds.compactMap { assetToKey[$0] }.first
+            
+            // Resolve key avatar asset
+            let keyAsset = memberAssets.first(where: { $0.localIdentifier == matchedKey }) ?? identity.avatarFace.asset
+            
             finalClusters.append(PersonCluster(
-                id: c.id,
-                name: nil,
-                avatarAsset: c.avatarAsset,
-                avatarFaceBoundingBox: c.avatarBox,
-                assets: c.memberAssets
+                id: "person_\(clusterIndex)",
+                name: matchedName,
+                avatarAsset: keyAsset,
+                avatarFaceBoundingBox: identity.avatarFace.boundingBox,
+                assets: memberAssets,
+                isFavorite: matchedFav,
+                keyAssetId: matchedKey
             ))
+            clusterIndex += 1
+        }
+        
+        // 2. Apple Photos singleton policy:
+        // Isolated singleton/noise faces are excluded from the primary shelf UNLESS explicitly named by user
+        var unclusteredByAsset: [String: [BiometricFaceItem]] = [:]
+        for face in dbscanOutput.unclusteredFaces {
+            unclusteredByAsset[face.asset.localIdentifier, default: []].append(face)
+        }
+        
+        for (assetId, faces) in unclusteredByAsset {
+            if let customName = assetToName[assetId], let firstFace = faces.first {
+                let isFav = assetToFav[assetId] ?? false
+                finalClusters.append(PersonCluster(
+                    id: "person_\(clusterIndex)",
+                    name: customName,
+                    avatarAsset: firstFace.asset,
+                    avatarFaceBoundingBox: firstFace.boundingBox,
+                    assets: [firstFace.asset],
+                    isFavorite: isFav,
+                    keyAssetId: assetId
+                ))
+                clusterIndex += 1
+            }
+        }
+        
+        // Sort clusters: Favorites first, then by photo count descending
+        finalClusters.sort {
+            if $0.isFavorite != $1.isFavorite {
+                return $0.isFavorite && !$1.isFavorite
+            }
+            return $0.assets.count > $1.assets.count
         }
         
         return PeopleScanOutput(personClusters: finalClusters, allPhotoItems: photoItems)
     }
     
-    private func extractFacesAndPrints(for asset: PHAsset) async -> AssetFaceResult {
-        // Use high-fidelity thumbnail: `.highQualityFormat` + `.exact` resizeMode for accurate
-        // face landmark geometry and feature print generation. `.fastFormat` artifacts degrade
-        // landmark point accuracy and cause false blink/closed-eye positives.
-        guard let cgImage = await ThumbnailService.shared.requestAnalysisThumbnail(for: asset, targetSize: CGSize(width: 1024, height: 1024)) else {
-            return AssetFaceResult(item: nil, faces: [])
+    private func analyzeAsset(asset: PHAsset, cachedDTOs: [FaceEmbeddingDTO]?) async -> AssetFaceResult {
+        // If already cached in SwiftData, reconstruct in microseconds without re-running Vision / CoreML
+        if let cachedDTOs, !cachedDTOs.isEmpty {
+            let biometricFaces = cachedDTOs.map { dto in
+                BiometricFaceItem(
+                    id: dto.id,
+                    asset: asset,
+                    boundingBox: dto.boundingBox,
+                    captureQuality: dto.captureQuality,
+                    embedding: dto.embedding
+                )
+            }
+            let size = asset.primaryResourceFileSize ?? 3_500_000
+            let item = PersonPhotoItem(
+                asset: asset,
+                faceCount: cachedDTOs.count,
+                hasBlinkedEyes: false,
+                averageQuality: 1.0,
+                fileSize: size
+            )
+            return AssetFaceResult(item: item, faces: biometricFaces, newEmbeddings: [])
+        }
+        
+        return await extractFacesAndBiometrics(for: asset)
+    }
+    
+    private func extractFacesAndBiometrics(for asset: PHAsset) async -> AssetFaceResult {
+        guard let cgImage = await ThumbnailService.shared.requestAnalysisThumbnail(
+            for: asset,
+            targetSize: CGSize(width: 1024, height: 1024)
+        ) else {
+            return AssetFaceResult(item: nil, faces: [], newEmbeddings: [])
         }
         
         return autoreleasepool {
-            let faceRequest = VNDetectFaceRectanglesRequest()
+            let landmarksRequest = VNDetectFaceLandmarksRequest()
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
             
             do {
-                try handler.perform([faceRequest])
-                let observations = faceRequest.results ?? []
+                try handler.perform([landmarksRequest])
+                let observations = landmarksRequest.results ?? []
                 guard !observations.isEmpty else {
-                    return AssetFaceResult(item: nil, faces: [])
-                }
-                
-                // Detect Blinks — strict dual-eye AND logic to avoid false positives on squinting,
-                // side profiles, downward gaze, and bright-light partial closures.
-                var hasBlink = false
-                let landmarksRequest = VNDetectFaceLandmarksRequest()
-                try? handler.perform([landmarksRequest])
-                let landmarkResults = landmarksRequest.results ?? []
-                for face in landmarkResults {
-                    // Guard 1: faceCaptureQuality — skip low-quality face observations (side profiles, tiny faces)
-                    // Quality is nil for old Vision revisions, treat nil as passing to avoid masking real blinks.
-                    if let quality = face.faceCaptureQuality, quality < 0.35 { continue }
-
-                    // Guard 2: Face must be large enough relative to the image for reliable landmark geometry.
-                    // Faces smaller than 8% of image area produce noisy landmark point distributions.
-                    let faceAreaFraction = face.boundingBox.width * face.boundingBox.height
-                    guard faceAreaFraction >= 0.08 else { continue }
-
-                    if let left = face.landmarks?.leftEye, let right = face.landmarks?.rightEye {
-                        let leftRatio = eyeOpenRatio(left)
-                        let rightRatio = eyeOpenRatio(right)
-                        // Both eyes must be below threshold simultaneously.
-                        // Single-eye check causes massive false positives on profiles and oblique angles.
-                        // Threshold lowered to 0.12 (was 0.14) to require a more pronounced closure.
-                        if leftRatio < 0.12 && rightRatio < 0.12 {
-                            hasBlink = true
-                            break
-                        }
-                    }
+                    return AssetFaceResult(item: nil, faces: [], newEmbeddings: [])
                 }
                 
                 let imgW = CGFloat(cgImage.width)
                 let imgH = CGFloat(cgImage.height)
-                var facePrints: [DetectedFacePrint] = []
                 
-                for obs in observations {
-                    let box = obs.boundingBox
-                    let x = box.origin.x * imgW
-                    let y = (1.0 - box.origin.y - box.size.height) * imgH
-                    let w = box.size.width * imgW
-                    let h = box.size.height * imgH
-                    
-                    // Add 20% margin to include hair/ears for stable facial identity prints
-                    let marginX = w * 0.20
-                    let marginY = h * 0.20
-                    let cropRect = CGRect(
-                        x: max(0, x - marginX),
-                        y: max(0, y - marginY),
-                        width: min(imgW - max(0, x - marginX), w + 2 * marginX),
-                        height: min(imgH - max(0, y - marginY), h + 2 * marginY)
-                    )
-                    
-                    // Reject tiny background faces (< 80px) to prevent noise & false positive identity merges
-                    guard cropRect.width >= 80 && cropRect.height >= 80 else { continue }
-                    guard let faceChip = cgImage.cropping(to: cropRect) else { continue }
-                    
-                    let printRequest = VNGenerateImageFeaturePrintRequest()
-                    printRequest.imageCropAndScaleOption = .scaleFill
-                    let chipHandler = VNImageRequestHandler(cgImage: faceChip, orientation: .up, options: [:])
-                    try? chipHandler.perform([printRequest])
-                    
-                    if let printObs = printRequest.results?.first as? VNFeaturePrintObservation {
-                        facePrints.append(DetectedFacePrint(asset: asset, box: box, featurePrint: printObs))
+                var hasBlink = false
+                var biometricFaces: [BiometricFaceItem] = []
+                var newDTOs: [FaceEmbeddingDTO] = []
+                
+                for (faceIndex, face) in observations.enumerated() {
+                    // Blink Detection — dual eye threshold
+                    if let quality = face.faceCaptureQuality, quality >= 0.35 {
+                        let faceAreaFraction = face.boundingBox.width * face.boundingBox.height
+                        if faceAreaFraction >= 0.08,
+                           let left = face.landmarks?.leftEye,
+                           let right = face.landmarks?.rightEye {
+                            let leftRatio = eyeOpenRatio(left)
+                            let rightRatio = eyeOpenRatio(right)
+                            if leftRatio < 0.12 && rightRatio < 0.12 {
+                                hasBlink = true
+                            }
+                        }
                     }
+                    
+                    // Quality and pose gating for invariant biometric identification
+                    guard FaceAlignmentEngine.shared.passesQualityGates(
+                        observation: face,
+                        imageWidth: imgW,
+                        imageHeight: imgH,
+                        minDimension: 64.0,
+                        minQuality: 0.35,
+                        maxYawAngle: 0.785398 // 45 degrees
+                    ) else {
+                        continue
+                    }
+                    
+                    // Canonical affine landmark alignment to 112x112 chip
+                    guard let alignedChip = FaceAlignmentEngine.shared.alignFace(from: cgImage, observation: face) else {
+                        continue
+                    }
+                    
+                    // MobileFaceNet CoreML feature extraction
+                    guard let embedding = FaceEmbeddingEngine.shared.generateEmbedding(from: alignedChip) else {
+                        continue
+                    }
+                    
+                    let faceId = "\(asset.localIdentifier)_\(faceIndex)"
+                    let quality = face.faceCaptureQuality ?? 0.5
+                    
+                    biometricFaces.append(BiometricFaceItem(
+                        id: faceId,
+                        asset: asset,
+                        boundingBox: face.boundingBox,
+                        captureQuality: quality,
+                        embedding: embedding
+                    ))
+                    
+                    newDTOs.append(FaceEmbeddingDTO(
+                        id: faceId,
+                        assetIdentifier: asset.localIdentifier,
+                        faceIndex: faceIndex,
+                        boundingBox: face.boundingBox,
+                        captureQuality: quality,
+                        embedding: embedding
+                    ))
                 }
                 
                 let size = asset.primaryResourceFileSize ?? 3_500_000
@@ -295,9 +369,9 @@ actor PeopleAnalysisEngine {
                     fileSize: size
                 )
                 
-                return AssetFaceResult(item: item, faces: facePrints)
+                return AssetFaceResult(item: item, faces: biometricFaces, newEmbeddings: newDTOs)
             } catch {
-                return AssetFaceResult(item: nil, faces: [])
+                return AssetFaceResult(item: nil, faces: [], newEmbeddings: [])
             }
         }
     }
