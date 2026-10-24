@@ -8,7 +8,6 @@ import Photos
 
 struct HomeView: View {
     @Environment(PhotoLibraryService.self) private var photoService
-    @Environment(AppSettings.self) private var settings
     @Environment(AppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -133,9 +132,6 @@ struct HomeView: View {
             if newPhase == .active {
                 appModel.runDeltaSync()
             }
-        }
-        .onChange(of: settings.largeVideoThresholdMB) { _, _ in
-            appModel.refreshCounts()
         }
         .onAppear {
             if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {

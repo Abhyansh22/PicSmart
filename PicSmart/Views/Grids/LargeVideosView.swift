@@ -7,7 +7,6 @@ import SwiftUI
 import Photos
 
 struct LargeVideosView: View {
-    @Environment(AppSettings.self) private var settings
     @Environment(AppModel.self) private var appModel
     @State private var selectedAsset: PHAsset?
     @State private var isSelectionMode = false
@@ -38,75 +37,59 @@ struct LargeVideosView: View {
                 ScanningProgressView(
                     category: .largeVideos,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.progressMessage ?? "Scanning large videos…",
+                    statusMessage: viewModel.progressMessage ?? "Analyzing videos…",
                     onCancel: {
                         viewModel.cancel()
                     }
                 )
             } else if viewModel.sortedLargeVideoAssets.isEmpty {
                 ContentUnavailableView(
-                    "No Large Videos Found",
-                    systemImage: GalleryCategory.largeVideos.iconName,
-                    description: Text("No videos exceeding \(AppSettings.formatMB(settings.largeVideoThresholdMB)) found. You can adjust this in Settings.")
+                    "No Videos Found",
+                    systemImage: "video.slash",
+                    description: Text("No video files were found in your photo library.")
                 )
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        // Summary Bar
-                        HStack {
-                            Text("\(viewModel.sortedLargeVideoAssets.count) items")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            
-                            Text("(≥ \(AppSettings.formatMB(settings.largeVideoThresholdMB)))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            
-                            Spacer()
-                            
-                            let totalBytes = viewModel.sortedLargeVideoAssets.reduce(0) { $0 + (viewModel.fileSizes[$1.localIdentifier] ?? 0) }
-                            if totalBytes > 0 {
-                                Text("Total: \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))")
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
+                    LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+                        // Overall Summary Bar
+                        summaryBar
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
                         
-                        LazyVGrid(columns: columns, spacing: 2) {
-                            ForEach(Array(viewModel.sortedLargeVideoAssets.enumerated()), id: \.element.localIdentifier) { index, asset in
-                                let sizeText = viewModel.fileSizes[asset.localIdentifier].map {
-                                    ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-                                }
-                                let isSelected = selectedIds.contains(asset.localIdentifier)
-                                
-                                ThumbnailView(
-                                    asset: asset,
-                                    badgeText: sizeText,
-                                    isSelectionMode: isSelectionMode,
-                                    isSelected: isSelected,
-                                    onToggleSelect: {
-                                        toggleSelection(asset.localIdentifier)
+                        // Descending Size Tier Sections
+                        ForEach(viewModel.videoSections) { section in
+                            Section {
+                                LazyVGrid(columns: columns, spacing: 2) {
+                                    ForEach(section.assets, id: \.localIdentifier) { asset in
+                                        let sizeText = viewModel.fileSizes[asset.localIdentifier].map {
+                                            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                                        }
+                                        let isSelected = selectedIds.contains(asset.localIdentifier)
+                                        
+                                        ThumbnailView(
+                                            asset: asset,
+                                            badgeText: sizeText,
+                                            isSelectionMode: isSelectionMode,
+                                            isSelected: isSelected,
+                                            onToggleSelect: {
+                                                toggleSelection(asset.localIdentifier)
+                                            }
+                                        )
+                                        .onTapGesture {
+                                            if isSelectionMode {
+                                                toggleSelection(asset.localIdentifier)
+                                            } else {
+                                                selectedAsset = asset
+                                            }
+                                        }
                                     }
-                                )
-                                .onTapGesture {
-                                    if isSelectionMode {
-                                        toggleSelection(asset.localIdentifier)
-                                    } else {
-                                        selectedAsset = asset
-                                    }
                                 }
-                                .onAppear {
-                                    viewModel.prefetch(around: index)
-                                }
+                            } header: {
+                                sectionHeader(for: section)
                             }
                         }
-                        .padding(.bottom, isSelectionMode && !selectedIds.isEmpty ? 90 : 20)
                     }
+                    .padding(.bottom, isSelectionMode && !selectedIds.isEmpty ? 90 : 24)
                 }
             }
             
@@ -149,7 +132,7 @@ struct LargeVideosView: View {
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)
         }
-        .alert("Delete \(selectedIds.count) Large Videos?", isPresented: $showingDeleteAlert) {
+        .alert("Delete \(selectedIds.count) Videos?", isPresented: $showingDeleteAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Delete \(selectedIds.count) Videos", role: .destructive) {
                 Task {
@@ -166,6 +149,75 @@ struct LargeVideosView: View {
         } message: {
             Text("These \(selectedIds.count) videos will be moved to Recently Deleted in Apple Photos, recovering ~\(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file)).")
         }
+    }
+    
+    // MARK: - Subviews
+    
+    private var summaryBar: some View {
+        HStack {
+            Text("\(viewModel.sortedLargeVideoAssets.count) video\(viewModel.sortedLargeVideoAssets.count == 1 ? "" : "s")")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            
+            Spacer()
+            
+            let totalBytes = viewModel.sortedLargeVideoAssets.reduce(0) {
+                $0 + (viewModel.fileSizes[$1.localIdentifier] ?? 0)
+            }
+            if totalBytes > 0 {
+                Text("Total: \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+            }
+        }
+    }
+    
+    private func sectionHeader(for section: VideoSizeSection) -> some View {
+        let sectionIds = Set(section.assets.map(\.localIdentifier))
+        let isAllSelected = !sectionIds.isEmpty && sectionIds.isSubset(of: selectedIds)
+        
+        return HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: section.tier.iconName)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.accentColor)
+                    
+                    Text(section.title)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.primary)
+                }
+                
+                Text("\(section.assets.count) video\(section.assets.count == 1 ? "" : "s") • \(ByteCountFormatter.string(fromByteCount: section.totalBytes, countStyle: .file))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            if isSelectionMode {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        if isAllSelected {
+                            selectedIds.subtract(sectionIds)
+                        } else {
+                            selectedIds.formUnion(sectionIds)
+                        }
+                    }
+                } label: {
+                    Text(isAllSelected ? "Deselect" : "Select All")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
     }
     
     private func toggleSelection(_ id: String) {

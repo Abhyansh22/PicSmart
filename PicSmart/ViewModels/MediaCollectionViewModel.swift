@@ -80,6 +80,26 @@ final class MediaCollectionViewModel {
         }
     }
     
+    /// Groups large videos into descending size tier sections (e.g. 10 GB & More, 1 GB – 10 GB, etc.).
+    var videoSections: [VideoSizeSection] {
+        var grouped: [VideoSizeTier: [PHAsset]] = [:]
+        for asset in sortedLargeVideoAssets {
+            let size = fileSizes[asset.localIdentifier] ?? 0
+            let tier = VideoSizeTier.tier(for: size)
+            grouped[tier, default: []].append(asset)
+        }
+        
+        let sortedTiers = VideoSizeTier.allCases.sorted(by: >)
+        return sortedTiers.compactMap { tier in
+            guard let tierAssets = grouped[tier], !tierAssets.isEmpty else { return nil }
+            let sortedInTier = tierAssets.sorted {
+                (fileSizes[$0.localIdentifier] ?? 0) > (fileSizes[$1.localIdentifier] ?? 0)
+            }
+            let total = sortedInTier.reduce(0) { $0 + (fileSizes[$1.localIdentifier] ?? 0) }
+            return VideoSizeSection(tier: tier, assets: sortedInTier, totalBytes: total)
+        }
+    }
+    
     /// Incremental insertion for a newly discovered large video
     func appendLargeVideo(asset: PHAsset, size: Int64) {
         guard !fileSizes.keys.contains(asset.localIdentifier) else { return }
@@ -144,8 +164,7 @@ final class MediaCollectionViewModel {
             self.onScanCompleted?()
             
         case .largeVideos:
-            let threshold = AppSettings.shared.largeVideoThresholdBytes
-            let stream = await MediaAnalyzerEngine.shared.streamLargeVideos(minThresholdBytes: threshold)
+            let stream = await MediaAnalyzerEngine.shared.streamLargeVideos(minThresholdBytes: 0)
             
             for await (sortedSnapshot, sizeMap, progress) in stream {
                 if Task.isCancelled { break }
@@ -196,8 +215,7 @@ final class MediaCollectionViewModel {
                 self.hasLoaded = true
             }
         case .largeVideos:
-            let threshold = AppSettings.shared.largeVideoThresholdBytes
-            let stream = await MediaAnalyzerEngine.shared.streamLargeVideos(minThresholdBytes: threshold)
+            let stream = await MediaAnalyzerEngine.shared.streamLargeVideos(minThresholdBytes: 0)
             
             for await (sortedSnapshot, sizeMap, _) in stream {
                 if Task.isCancelled { break }

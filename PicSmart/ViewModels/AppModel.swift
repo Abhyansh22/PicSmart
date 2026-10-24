@@ -166,11 +166,9 @@ final class AppModel {
             if Task.isCancelled { break }
             
             if asset.mediaType == .video {
-                // Check if large video
+                // Record video into large videos repository
                 let size = asset.primaryResourceFileSize ?? 0
-                if size >= AppSettings.shared.largeVideoThresholdBytes {
-                    self.largeVideosViewModel.appendLargeVideo(asset: asset, size: size)
-                }
+                self.largeVideosViewModel.appendLargeVideo(asset: asset, size: size)
             } else if asset.mediaType == .image {
                 // 1. Evaluate Blur immediately
                 if let blurred = await BlurredPhotosFunnel.shared.evaluateSingleAsset(asset) {
@@ -257,8 +255,7 @@ final class AppModel {
             let screenshots = await scCount
             let videos = await vCount
             
-            let threshold = AppSettings.shared.largeVideoThresholdBytes
-            let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: threshold)
+            let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: 0)
             
             if !Task.isCancelled {
                 counts[.screenshots] = screenshots

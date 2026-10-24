@@ -53,8 +53,7 @@ final class HomeViewModel {
             let videos = await vCount
             
             // Fast in-memory check for large video count without blocking IPC
-            let threshold = AppSettings.shared.largeVideoThresholdBytes
-            let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: threshold)
+            let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: 0)
             
             if !Task.isCancelled {
                 counts[.screenshots] = screenshots
