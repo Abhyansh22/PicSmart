@@ -11,6 +11,9 @@ struct ThumbnailView: View {
     var badgeText: String?
     var isKeeper: Bool = false
     var isBestShot: Bool = false
+    var isSelectionMode: Bool = false
+    var isSelected: Bool = false
+    var onToggleSelect: (() -> Void)? = nil
     
     @State private var image: UIImage?
     @State private var requestID: PHImageRequestID?
@@ -33,29 +36,35 @@ struct ThumbnailView: View {
                         }
                 }
                 
-                // Badges overlay
+                // Top-leading subtle "Best Shot" / "Keeper" badges
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        if isBestShot {
-                            Text("Best")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.yellow, in: Capsule())
+                    if isBestShot {
+                        HStack(spacing: 3) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 9, weight: .bold))
+                            Text("Best Shot")
+                                .font(.system(size: 10, weight: .semibold))
                         }
-                        if isKeeper {
-                            Text("Keep")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue, in: Capsule())
+                        .foregroundStyle(.yellow)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    } else if isKeeper {
+                        HStack(spacing: 3) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 9, weight: .bold))
+                            Text("Keeper")
+                                .font(.system(size: 10, weight: .semibold))
                         }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.blue, in: Capsule())
                     }
                     
                     Spacer()
                     
+                    // Bottom video duration & file size badge
                     HStack(spacing: 4) {
                         if asset.mediaType == .video {
                             Image(systemName: "play.fill")
@@ -81,12 +90,41 @@ struct ThumbnailView: View {
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 5))
+                    .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 5))
                 }
                 .padding(6)
+                
+                // Top-trailing Selection Mode Checkbox
+                if isSelectionMode {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button {
+                                onToggleSelect?()
+                            } label: {
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(
+                                        isSelected ? .white : .secondary,
+                                        isSelected ? Color.blue : Color.black.opacity(0.4)
+                                    )
+                                    .background(Circle().fill(.ultraThinMaterial))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(6)
+                        }
+                        Spacer()
+                    }
+                    .transition(.scale(scale: 0.7).combined(with: .opacity))
+                }
             }
         }
         .aspectRatio(1, contentMode: .fit)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isSelectionMode && isSelected ? Color.blue : Color.clear, lineWidth: 2)
+        )
         .onAppear {
             loadImage()
         }

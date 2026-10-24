@@ -7,19 +7,31 @@ import SwiftUI
 import Photos
 
 struct PersonDetailView: View {
-    @Binding var person: PersonCluster
-    var onRename: ((String) -> Void)?
+    let personId: String
     
     @Environment(AppModel.self) private var appModel
-    @State private var isEditingName = false
-    @State private var nameText = ""
-    @State private var selectedAssetForPreview: PHAsset?
-    @State private var selectedIds: Set<String> = []
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var isSelectionMode = false
+    @State private var selectedIds = Set<String>()
+    @State private var activeAsset: PHAsset?
     @State private var showingDeleteAlert = false
+    @State private var showingRenameAlert = false
+    @State private var renameText = ""
     @State private var isCleaning = false
     
+    private var viewModel: PeopleAndFacesViewModel {
+        appModel.peopleAndFacesViewModel
+    }
+    
+    private var person: PersonCluster? {
+        viewModel.personClusters.first { $0.id == personId }
+    }
+    
     private let columns = [
-        GridItem(.adaptive(minimum: 105, maximum: 140), spacing: 6)
+        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 2)
     ]
     
     var body: some View {
@@ -27,95 +39,122 @@ struct PersonDetailView: View {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
-            ScrollView {
-                VStack(spacing: 16) {
-                    // Hero Person Header Card
-                    heroPersonHeader
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-                    
-                    // Photos Grid
-                    LazyVGrid(columns: columns, spacing: 6) {
-                        ForEach(person.assets) { asset in
-                            let isSelected = selectedIds.contains(asset.localIdentifier)
-                            
-                            ZStack(alignment: .topTrailing) {
-                                ThumbnailView(asset: asset)
-                                    .aspectRatio(1, contentMode: .fill)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedAssetForPreview = asset
-                                    }
+            if let person {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        // Hero Header
+                        heroHeader(for: person)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 10)
+                        
+                        // Edge-to-edge photos grid
+                        LazyVGrid(columns: columns, spacing: 2) {
+                            ForEach(person.assets) { asset in
+                                let isSelected = selectedIds.contains(asset.localIdentifier)
                                 
-                                Button {
-                                    if selectedIds.contains(asset.localIdentifier) {
-                                        selectedIds.remove(asset.localIdentifier)
+                                ThumbnailView(
+                                    asset: asset,
+                                    isSelectionMode: isSelectionMode,
+                                    isSelected: isSelected,
+                                    onToggleSelect: {
+                                        toggleSelection(asset.localIdentifier)
+                                    }
+                                )
+                                .onTapGesture {
+                                    if isSelectionMode {
+                                        toggleSelection(asset.localIdentifier)
                                     } else {
-                                        selectedIds.insert(asset.localIdentifier)
+                                        activeAsset = asset
                                     }
-                                } label: {
-                                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                        .font(.system(size: 20, weight: .bold))
-                                        .symbolRenderingMode(.palette)
-                                        .foregroundStyle(
-                                            isSelected ? .white : .secondary,
-                                            isSelected ? Color.blue : Color.black.opacity(0.4)
-                                        )
-                                        .background(Circle().fill(.ultraThinMaterial))
-                                        .padding(6)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
-                            )
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    Task {
-                                        let deleted = try? await appModel.deleteAssets(
-                                            localIdentifiers: [asset.localIdentifier],
-                                            categoryTitle: person.displayName
-                                        )
-                                        if let deleted {
-                                            person.assets.removeAll { deleted.contains($0.localIdentifier) }
-                                        }
-                                    }
-                                } label: {
-                                    Label("Delete Photo", systemImage: "trash")
                                 }
                             }
                         }
+                        .padding(.bottom, isSelectionMode && !selectedIds.isEmpty ? 90 : 20)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 90)
                 }
+            } else {
+                ContentUnavailableView(
+                    "Person Removed",
+                    systemImage: "person.slash",
+                    description: Text("This person has been removed from your People directory.")
+                )
             }
             
-            // Bottom Clean Bar
-            if !selectedIds.isEmpty {
+            // Bottom Clean Bar in Selection Mode
+            if isSelectionMode && !selectedIds.isEmpty {
                 bottomCleanBar
             }
         }
-        .navigationTitle(person.displayName)
+        .navigationTitle(person?.displayName ?? "Person")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $selectedAssetForPreview) { asset in
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if let person, !person.assets.isEmpty {
+                    HStack(spacing: 12) {
+                        Button(isSelectionMode ? "Done" : "Select") {
+                            withAnimation(.snappy(duration: 0.25)) {
+                                isSelectionMode.toggle()
+                                if !isSelectionMode {
+                                    selectedIds.removeAll()
+                                }
+                            }
+                        }
+                        .fontWeight(isSelectionMode ? .semibold : .regular)
+                        
+                        Menu {
+                            Button {
+                                viewModel.toggleFavorite(id: personId)
+                            } label: {
+                                Label(person.isFavorite ? "Unfavorite" : "Favorite", systemImage: person.isFavorite ? "heart.slash" : "heart")
+                            }
+                            
+                            Button {
+                                renameText = person.name ?? ""
+                                showingRenameAlert = true
+                            } label: {
+                                Label("Edit Name", systemImage: "pencil")
+                            }
+                            
+                            Divider()
+                            
+                            Button(role: .destructive) {
+                                viewModel.removePerson(id: personId)
+                                dismiss()
+                            } label: {
+                                Label("Remove from People", systemImage: "person.crop.circle.badge.minus")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.body)
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(item: $activeAsset) { asset in
             FullScreenAssetView(asset: asset)
+        }
+        .alert("Name Person", isPresented: $showingRenameAlert) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) { }
+            Button("Save") {
+                viewModel.renamePerson(id: personId, newName: renameText)
+            }
+        } message: {
+            Text("Add or update this person's name.")
         }
         .alert("Delete \(selectedIds.count) Photos?", isPresented: $showingDeleteAlert) {
             Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
+            Button("Delete \(selectedIds.count) Photos", role: .destructive) {
                 Task {
                     isCleaning = true
                     let toDelete = Array(selectedIds)
-                    let deleted = try? await appModel.deleteAssets(localIdentifiers: toDelete, categoryTitle: person.displayName)
-                    if let deleted {
-                        person.assets.removeAll { deleted.contains($0.localIdentifier) }
-                        selectedIds.subtract(deleted)
-                    }
+                    try? await appModel.deleteAssets(localIdentifiers: toDelete, categoryTitle: person?.displayName ?? "Person")
+                    selectedIds.removeAll()
                     isCleaning = false
+                    if let p = person, p.assets.isEmpty {
+                        isSelectionMode = false
+                    }
                 }
             }
         } message: {
@@ -123,59 +162,55 @@ struct PersonDetailView: View {
         }
     }
     
-    // MARK: - Hero Person Header
+    // MARK: - Hero Header
     
-    private var heroPersonHeader: some View {
+    private func heroHeader(for person: PersonCluster) -> some View {
         VStack(spacing: 12) {
             FaceAvatarView(
                 asset: person.avatarAsset,
                 faceBoundingBox: person.avatarFaceBoundingBox,
-                size: 92
+                size: 100
             )
             
-            if isEditingName {
-                HStack(spacing: 8) {
-                    TextField("Enter Name", text: $nameText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 200)
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(person.isNamed ? person.displayName : "Add Name")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(person.isNamed ? Color.primary : Color.blue)
+                    
+                    if person.isFavorite {
+                        Image(systemName: "heart.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(.red)
+                    }
                     
                     Button {
-                        if !nameText.trimmingCharacters(in: .whitespaces).isEmpty {
-                            person.name = nameText.trimmingCharacters(in: .whitespaces)
-                            onRename?(person.name ?? "")
-                        }
-                        isEditingName = false
+                        renameText = person.name ?? ""
+                        showingRenameAlert = true
                     } label: {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.blue)
-                    }
-                }
-            } else {
-                Button {
-                    nameText = person.name ?? ""
-                    isEditingName = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(person.displayName)
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.primary)
-                        
                         Image(systemName: "pencil.circle.fill")
-                            .font(.footnote)
+                            .font(.body)
                             .foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                
+                Text("\(person.count) photo\(person.count == 1 ? "" : "s")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            
-            Text("\(person.count) photos")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+    }
+    
+    private func toggleSelection(_ id: String) {
+        if selectedIds.contains(id) {
+            selectedIds.remove(id)
+        } else {
+            selectedIds.insert(id)
+        }
     }
     
     // MARK: - Floating Clean Bar
@@ -184,7 +219,7 @@ struct PersonDetailView: View {
         VStack(spacing: 0) {
             Divider()
             HStack {
-                Text("\(selectedIds.count) items selected")
+                Text("\(selectedIds.count) photos selected")
                     .font(.subheadline.weight(.semibold))
                 
                 Spacer()
@@ -199,7 +234,7 @@ struct PersonDetailView: View {
                         } else {
                             Image(systemName: "trash.fill")
                         }
-                        Text("Clean Selected")
+                        Text("Delete Selected")
                             .fontWeight(.semibold)
                     }
                     .padding(.horizontal, 16)

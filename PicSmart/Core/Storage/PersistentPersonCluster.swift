@@ -18,6 +18,8 @@ final class PersistentPersonCluster {
     var avatarFaceWidth: Double
     var avatarFaceHeight: Double
     var memberAssetIdentifiers: [String]
+    var isFavorite: Bool
+    var keyAssetIdentifier: String?
     var updatedAt: Date
     
     init(
@@ -25,7 +27,9 @@ final class PersistentPersonCluster {
         name: String? = nil,
         avatarAssetIdentifier: String,
         avatarFaceBoundingBox: CGRect,
-        memberAssetIdentifiers: [String]
+        memberAssetIdentifiers: [String],
+        isFavorite: Bool = false,
+        keyAssetIdentifier: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -35,6 +39,8 @@ final class PersistentPersonCluster {
         self.avatarFaceWidth = Double(avatarFaceBoundingBox.size.width)
         self.avatarFaceHeight = Double(avatarFaceBoundingBox.size.height)
         self.memberAssetIdentifiers = memberAssetIdentifiers
+        self.isFavorite = isFavorite
+        self.keyAssetIdentifier = keyAssetIdentifier
         self.updatedAt = Date()
     }
     

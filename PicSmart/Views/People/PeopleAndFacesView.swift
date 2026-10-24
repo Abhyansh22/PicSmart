@@ -8,31 +8,56 @@ import Photos
 
 struct PeopleAndFacesView: View {
     @Environment(AppModel.self) private var appModel
-    @State private var showingDeleteAlert = false
-    @State private var isCleaning = false
-    @State private var selectedAssetForPreview: PHAsset?
+    @State private var searchText = ""
+    @State private var renamingPersonId: String? = nil
+    @State private var renamingText = ""
+    @State private var showingRenameAlert = false
     
     private var viewModel: PeopleAndFacesViewModel {
         appModel.peopleAndFacesViewModel
     }
     
-    private let columns = [
-        GridItem(.adaptive(minimum: 105, maximum: 140), spacing: 6)
+    private let directoryColumns = [
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16)
     ]
     
+    private let favoritesColumns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+    
+    private var filteredClusters: [PersonCluster] {
+        if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+            return viewModel.personClusters
+        }
+        return viewModel.personClusters.filter {
+            $0.displayName.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+    
+    private var favoriteClusters: [PersonCluster] {
+        filteredClusters.filter { $0.isFavorite }
+    }
+    
+    private var otherClusters: [PersonCluster] {
+        filteredClusters.filter { !$0.isFavorite }
+    }
+    
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
-            if viewModel.items.isEmpty && !viewModel.hasCompletedScan {
+            if viewModel.personClusters.isEmpty && !viewModel.hasCompletedScan {
                 ScanningProgressView(
                     category: .people,
                     progress: viewModel.progress,
                     statusMessage: viewModel.statusMessage ?? "Clustering people & faces…",
                     onCancel: { viewModel.cancel() }
                 )
-            } else if viewModel.items.isEmpty && viewModel.personClusters.isEmpty {
+            } else if viewModel.personClusters.isEmpty {
                 ContentUnavailableView(
                     "No People Found",
                     systemImage: "person.2.slash",
@@ -40,124 +65,31 @@ struct PeopleAndFacesView: View {
                 )
             } else {
                 ScrollView {
-                    VStack(spacing: 16) {
-                        // Section 1: Google Photos-style People Avatars Carousel
-                        if !viewModel.personClusters.isEmpty {
-                            peopleAvatarsSection
-                                .padding(.top, 12)
+                    VStack(alignment: .leading, spacing: 22) {
+                        // Section 1: Clean Up Recommendations Tray
+                        if !viewModel.blinks.isEmpty {
+                            cleanupAssistantSection
+                                .padding(.horizontal, 16)
+                                .padding(.top, 4)
                         }
                         
-                        Divider()
-                            .padding(.horizontal, 16)
-                        
-                        // Section 2: Filter Pills Bar
-                        filterPillsBar
-                            .padding(.horizontal, 16)
-                        
-                        // Section 3: Summary & Controls Header
-                        summaryCard
-                            .padding(.horizontal, 16)
-                        
-                        if viewModel.filteredItems.isEmpty {
-                            ContentUnavailableView(
-                                "No Matching Photos",
-                                systemImage: viewModel.selectedFilter.iconName,
-                                description: Text("No photos found in \(viewModel.selectedFilter.rawValue).")
-                            )
-                            .padding(.top, 30)
-                        } else {
-                            // Media Grid
-                            LazyVGrid(columns: columns, spacing: 6) {
-                                ForEach(viewModel.filteredItems) { item in
-                                    let isSelected = viewModel.selectedIds.contains(item.id)
-                                    
-                                    ZStack(alignment: .topTrailing) {
-                                        ZStack(alignment: .bottomLeading) {
-                                            ThumbnailView(
-                                                asset: item.asset,
-                                                badgeText: ByteCountFormatter.string(fromByteCount: item.fileSize, countStyle: .file)
-                                            )
-                                            .aspectRatio(1, contentMode: .fill)
-                                            .clipped()
-                                            
-                                            // Face Info Tag
-                                            HStack(spacing: 4) {
-                                                if item.hasBlinkedEyes {
-                                                    Image(systemName: "eye.slash.fill")
-                                                        .font(.system(size: 9))
-                                                    Text("Blink")
-                                                        .font(.system(size: 10, weight: .bold))
-                                                } else if item.isSoloPortrait {
-                                                    Text("1 Person")
-                                                        .font(.system(size: 10, weight: .bold))
-                                                } else {
-                                                    Text("\(item.faceCount) People")
-                                                        .font(.system(size: 10, weight: .bold))
-                                                }
-                                            }
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 3)
-                                            .background(.ultraThinMaterial, in: Capsule())
-                                            .foregroundStyle(item.hasBlinkedEyes ? Color.red : Color.cyan)
-                                            .padding(6)
-                                        }
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            selectedAssetForPreview = item.asset
-                                        }
-                                        
-                                        // Selection Circle Toggle
-                                        Button {
-                                            viewModel.toggleSelection(item.id)
-                                        } label: {
-                                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                                .font(.system(size: 20, weight: .bold))
-                                                .symbolRenderingMode(.palette)
-                                                .foregroundStyle(
-                                                    isSelected ? .white : .secondary,
-                                                    isSelected ? Color.blue : Color.black.opacity(0.4)
-                                                )
-                                                .background(Circle().fill(.ultraThinMaterial))
-                                                .padding(6)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
-                                    )
-                                    .contextMenu {
-                                        Button {
-                                            viewModel.toggleSelection(item.id)
-                                        } label: {
-                                            Label(isSelected ? "Deselect" : "Select for Deletion", systemImage: isSelected ? "circle" : "checkmark.circle")
-                                        }
-                                        
-                                        Button(role: .destructive) {
-                                            Task {
-                                                try? await appModel.deleteAssets(localIdentifiers: [item.id], categoryTitle: "People & Faces")
-                                            }
-                                        } label: {
-                                            Label("Delete This Photo", systemImage: "trash")
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 90) // space for bottom clean bar
+                        // Section 2: Favorites (Hero Cards)
+                        if !favoriteClusters.isEmpty {
+                            favoritesSection
+                                .padding(.horizontal, 16)
                         }
+                        
+                        // Section 3: People Directory Grid
+                        peopleDirectorySection
+                            .padding(.horizontal, 16)
                     }
+                    .padding(.vertical, 12)
                 }
             }
-            
-            // Bottom Clean Bar
-            if !viewModel.items.isEmpty && viewModel.selectedCount > 0 {
-                bottomCleanBar
-            }
         }
-        .navigationTitle("People & Faces")
+        .navigationTitle("People & Pets")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search people")
         .onAppear {
             AnalysisPipelineCoordinator.shared.elevatePriority(for: .people, in: appModel)
             viewModel.onAppear()
@@ -167,205 +99,223 @@ struct PeopleAndFacesView: View {
             AnalysisPipelineCoordinator.shared.releasePriority(for: .people)
             viewModel.onDisappear()
         }
-        .sheet(item: $selectedAssetForPreview) { asset in
-            FullScreenAssetView(asset: asset)
-        }
-        .alert("Delete \(viewModel.selectedCount) Selected Photos?", isPresented: $showingDeleteAlert) {
+        .alert("Name Person", isPresented: $showingRenameAlert) {
+            TextField("Name", text: $renamingText)
             Button("Cancel", role: .cancel) { }
-            Button("Delete \(viewModel.selectedCount) Photos", role: .destructive) {
-                Task {
-                    isCleaning = true
-                    let toDelete = Array(viewModel.selectedIds)
-                    try? await appModel.deleteAssets(localIdentifiers: toDelete, categoryTitle: "People & Faces")
-                    isCleaning = false
+            Button("Save") {
+                if let id = renamingPersonId {
+                    viewModel.renamePerson(id: id, newName: renamingText)
                 }
             }
         } message: {
-            Text("These \(viewModel.selectedCount) photos will be moved to Recently Deleted in Apple Photos.")
+            Text("Add a name for this person to easily search and organize photos.")
         }
     }
     
-    // MARK: - Section 1: Google Photos People Carousel
+    // MARK: - Section 1: Cleanup Assistant Tray
     
-    private var peopleAvatarsSection: some View {
+    private var cleanupAssistantSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Clean Up Recommendations")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 4)
+            
+            NavigationLink {
+                PeopleCleanupReviewView(
+                    cleanupType: .blinks,
+                    items: viewModel.blinks
+                )
+            } label: {
+                HStack(spacing: 14) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.orange.opacity(0.12))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "eye.slash.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Review Blinks & Closed Eyes")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("\(viewModel.blinks.count) photo\(viewModel.blinks.count == 1 ? "" : "s") with closed eyes detected")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(12)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    
+    // MARK: - Section 2: Favorites (Hero Cards)
+    
+    private var favoritesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Favorites")
+                    .font(.headline.weight(.semibold))
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+            
+            LazyVGrid(columns: favoritesColumns, spacing: 12) {
+                ForEach(favoriteClusters) { person in
+                    NavigationLink {
+                        PersonDetailView(personId: person.id)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            FaceAvatarView(
+                                asset: person.avatarAsset,
+                                faceBoundingBox: person.avatarFaceBoundingBox,
+                                size: 140,
+                                isHeroCard: true,
+                                cornerRadius: 16
+                            )
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(person.isNamed ? person.displayName : "Add Name")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(person.isNamed ? Color.primary : Color.blue)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Image(systemName: "heart.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
+                                
+                                Text("\(person.count) photo\(person.count == 1 ? "" : "s")")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 4)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            viewModel.toggleFavorite(id: person.id)
+                        } label: {
+                            Label("Unfavorite", systemImage: "heart.slash")
+                        }
+                        
+                        Button {
+                            renamingPersonId = person.id
+                            renamingText = person.name ?? ""
+                            showingRenameAlert = true
+                        } label: {
+                            Label("Edit Name", systemImage: "pencil")
+                        }
+                        
+                        Divider()
+                        
+                        Button(role: .destructive) {
+                            viewModel.removePerson(id: person.id)
+                        } label: {
+                            Label("Remove from People", systemImage: "person.crop.circle.badge.minus")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Section 3: People Directory Grid
+    
+    private var peopleDirectorySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("People & Groups")
+                Text("People")
                     .font(.headline.weight(.semibold))
-                    .foregroundStyle(.primary)
                 
-                Text("\(viewModel.personClusters.count)")
+                Text("\(otherClusters.count)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 
                 Spacer()
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 4)
             
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    ForEach(Array(viewModel.personClusters.indices), id: \.self) { idx in
-                        let cluster = viewModel.personClusters[idx]
-                        
-                        NavigationLink {
-                            PersonDetailView(
-                                person: Binding(
-                                    get: { viewModel.personClusters[idx] },
-                                    set: { viewModel.personClusters[idx] = $0 }
-                                ),
-                                onRename: { newName in
-                                    viewModel.renamePerson(id: cluster.id, newName: newName)
-                                }
+            LazyVGrid(columns: directoryColumns, spacing: 18) {
+                ForEach(otherClusters) { person in
+                    NavigationLink {
+                        PersonDetailView(personId: person.id)
+                    } label: {
+                        VStack(spacing: 8) {
+                            FaceAvatarView(
+                                asset: person.avatarAsset,
+                                faceBoundingBox: person.avatarFaceBoundingBox,
+                                size: 92
                             )
-                        } label: {
-                            VStack(spacing: 8) {
-                                FaceAvatarView(
-                                    asset: cluster.avatarAsset,
-                                    faceBoundingBox: cluster.avatarFaceBoundingBox,
-                                    size: 76
-                                )
-                                
-                                VStack(spacing: 2) {
-                                    Text(cluster.displayName)
-                                        .font(.subheadline.weight(.semibold))
+                            
+                            VStack(spacing: 3) {
+                                if person.isNamed {
+                                    Text(person.displayName)
+                                        .font(.subheadline.weight(.medium))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
-                                        .frame(maxWidth: 85)
-                                    
-                                    Text("\(cluster.count) photo\(cluster.count == 1 ? "" : "s")")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: 96)
+                                } else {
+                                    Button {
+                                        renamingPersonId = person.id
+                                        renamingText = ""
+                                        showingRenameAlert = true
+                                    } label: {
+                                        Text("Add Name")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.blue)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color.blue.opacity(0.12), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
                                 }
+                                
+                                Text("\(person.count) photo\(person.count == 1 ? "" : "s")")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-        }
-    }
-    
-    // MARK: - Section 2: Filter Pills Bar
-    
-    private var filterPillsBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(PeopleFilter.allCases) { filter in
-                    let isSelected = viewModel.selectedFilter == filter
-                    Button {
-                        withAnimation(.snappy) {
-                            viewModel.selectedFilter = filter
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: filter.iconName)
-                            Text(filter.rawValue)
-                                .fontWeight(isSelected ? .semibold : .regular)
-                            
-                            if filter == .blinks {
-                                let blinkCount = viewModel.items.filter { $0.hasBlinkedEyes }.count
-                                if blinkCount > 0 {
-                                    Text("\(blinkCount)")
-                                        .font(.caption2.weight(.bold))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.red, in: Capsule())
-                                        .foregroundStyle(.white)
-                                }
-                            }
-                        }
-                        .font(.footnote)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(isSelected ? Color.blue : Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
                     }
                     .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-    
-    // MARK: - Summary Card
-    
-    private var summaryCard: some View {
-        VStack(spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(viewModel.filteredItems.count) \(viewModel.selectedFilter.rawValue.lowercased())")
-                        .font(.subheadline.weight(.semibold))
-                    
-                    if viewModel.selectedSavingsBytes > 0 {
-                        Text("Selected ~\(ByteCountFormatter.string(fromByteCount: viewModel.selectedSavingsBytes, countStyle: .file))")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
-                }
-                Spacer()
-                
-                HStack(spacing: 8) {
-                    Button("Select All") {
-                        viewModel.selectAllInFilter()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    
-                    if viewModel.selectedCount > 0 {
-                        Button("Deselect") {
-                            viewModel.deselectAll()
+                    .contextMenu {
+                        Button {
+                            viewModel.toggleFavorite(id: person.id)
+                        } label: {
+                            Label("Favorite", systemImage: "heart")
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-    }
-    
-    // MARK: - Floating Clean Bar
-    
-    private var bottomCleanBar: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(viewModel.selectedCount) items selected")
-                        .font(.subheadline.weight(.semibold))
-                    if viewModel.selectedSavingsBytes > 0 {
-                        Text("Free up ~\(ByteCountFormatter.string(fromByteCount: viewModel.selectedSavingsBytes, countStyle: .file))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                
-                Spacer()
-                
-                Button {
-                    showingDeleteAlert = true
-                } label: {
-                    HStack(spacing: 6) {
-                        if isCleaning {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Image(systemName: "trash.fill")
+                        
+                        Button {
+                            renamingPersonId = person.id
+                            renamingText = person.name ?? ""
+                            showingRenameAlert = true
+                        } label: {
+                            Label("Edit Name", systemImage: "pencil")
                         }
-                        Text("Clean Selected")
-                            .fontWeight(.semibold)
+                        
+                        Divider()
+                        
+                        Button(role: .destructive) {
+                            viewModel.removePerson(id: person.id)
+                        } label: {
+                            Label("Remove from People", systemImage: "person.crop.circle.badge.minus")
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.red, in: Capsule())
-                    .foregroundStyle(.white)
                 }
-                .disabled(isCleaning)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.ultraThinMaterial)
         }
     }
 }

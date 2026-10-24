@@ -11,6 +11,7 @@ struct GroupedAssetGridView: View {
     @Environment(AppModel.self) private var appModel
     @State private var showingDeleteConfirmation = false
     @State private var isCleaning = false
+    @State private var isSelectionMode = false
     
     private var viewModel: GroupedScanViewModel {
         appModel.groupedViewModel(for: category)
@@ -73,6 +74,7 @@ struct GroupedAssetGridView: View {
                                             }
                                         }
                                     ),
+                                    isSelectionMode: isSelectionMode,
                                     onKeeperChanged: { newKeeper in
                                         viewModel.setKeeper(assetId: newKeeper, in: group.id)
                                     },
@@ -107,6 +109,18 @@ struct GroupedAssetGridView: View {
         }
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if !viewModel.groups.isEmpty {
+                    Button(isSelectionMode ? "Done" : "Select") {
+                        withAnimation(.snappy(duration: 0.25)) {
+                            isSelectionMode.toggle()
+                        }
+                    }
+                    .fontWeight(isSelectionMode ? .semibold : .regular)
+                }
+            }
+        }
         .onAppear {
             AnalysisPipelineCoordinator.shared.elevatePriority(for: category, in: appModel)
             viewModel.onAppear()
@@ -163,7 +177,7 @@ struct GroupedAssetGridView: View {
             Divider()
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(viewModel.totalRedundantCount) items selected")
+                    Text(isSelectionMode ? "\(viewModel.totalRedundantCount) items selected" : "\(viewModel.totalRedundantCount) redundant items")
                         .font(.subheadline.weight(.semibold))
                     if viewModel.totalSavingsBytes > 0 {
                         Text("Free up ~\(ByteCountFormatter.string(fromByteCount: viewModel.totalSavingsBytes, countStyle: .file))")
@@ -182,9 +196,9 @@ struct GroupedAssetGridView: View {
                             ProgressView()
                                 .tint(.white)
                         } else {
-                            Image(systemName: "trash.fill")
+                            Image(systemName: isSelectionMode ? "trash.fill" : "sparkles")
                         }
-                        Text("Clean All")
+                        Text(isSelectionMode ? "Delete Marked" : "Clean Redundant")
                             .fontWeight(.semibold)
                     }
                     .padding(.horizontal, 16)

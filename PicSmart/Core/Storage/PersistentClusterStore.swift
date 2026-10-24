@@ -23,6 +23,8 @@ struct PersistedPersonDTO: Sendable {
     let avatarAssetId: String
     let avatarFaceBoundingBox: CGRect
     let memberAssetIds: [String]
+    var isFavorite: Bool = false
+    var keyAssetId: String? = nil
 }
 
 @ModelActor
@@ -182,13 +184,19 @@ actor PersistentClusterStore {
     // MARK: - Person & Face Clusters
     
     func savePersonDTOs(_ persons: [PersistedPersonDTO]) throws {
-        // Fetch existing to preserve user custom names
+        // Fetch existing to preserve user custom names, favorites, and key photo choices
         let descriptor = FetchDescriptor<PersistentPersonCluster>()
         let existing = try modelContext.fetch(descriptor)
         var nameMap = [String: String]()
+        var favMap = [String: Bool]()
+        var keyMap = [String: String]()
         for p in existing {
             if let n = p.name, !n.isEmpty {
                 nameMap[p.id] = n
+            }
+            favMap[p.id] = p.isFavorite
+            if let k = p.keyAssetIdentifier {
+                keyMap[p.id] = k
             }
             modelContext.delete(p)
         }
@@ -197,9 +205,11 @@ actor PersistentClusterStore {
             let cluster = PersistentPersonCluster(
                 id: dto.id,
                 name: nameMap[dto.id] ?? dto.name,
-                avatarAssetIdentifier: dto.avatarAssetId,
+                avatarAssetIdentifier: keyMap[dto.id] ?? dto.keyAssetId ?? dto.avatarAssetId,
                 avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
-                memberAssetIdentifiers: dto.memberAssetIds
+                memberAssetIdentifiers: dto.memberAssetIds,
+                isFavorite: favMap[dto.id] ?? dto.isFavorite,
+                keyAssetIdentifier: keyMap[dto.id] ?? dto.keyAssetId
             )
             modelContext.insert(cluster)
         }
@@ -217,7 +227,9 @@ actor PersistentClusterStore {
                 name: $0.name,
                 avatarAssetId: $0.avatarAssetIdentifier,
                 avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
-                memberAssetIds: $0.memberAssetIdentifiers
+                memberAssetIds: $0.memberAssetIdentifiers,
+                isFavorite: $0.isFavorite,
+                keyAssetId: $0.keyAssetIdentifier
             )
         }
     }
@@ -228,6 +240,26 @@ actor PersistentClusterStore {
         )
         if let person = try modelContext.fetch(descriptor).first {
             person.name = newName.trimmingCharacters(in: .whitespaces)
+            try modelContext.save()
+        }
+    }
+    
+    func togglePersonFavorite(id: String) throws {
+        let descriptor = FetchDescriptor<PersistentPersonCluster>(
+            predicate: #Predicate { $0.id == id }
+        )
+        if let person = try modelContext.fetch(descriptor).first {
+            person.isFavorite.toggle()
+            try modelContext.save()
+        }
+    }
+    
+    func removePersonCluster(id: String) throws {
+        let descriptor = FetchDescriptor<PersistentPersonCluster>(
+            predicate: #Predicate { $0.id == id }
+        )
+        if let person = try modelContext.fetch(descriptor).first {
+            modelContext.delete(person)
             try modelContext.save()
         }
     }

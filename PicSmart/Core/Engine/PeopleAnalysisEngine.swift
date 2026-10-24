@@ -26,12 +26,21 @@ struct PersonCluster: Identifiable, Sendable {
     var avatarAsset: PHAsset
     var avatarFaceBoundingBox: CGRect
     var assets: [PHAsset]
+    var isFavorite: Bool = false
+    var keyAssetId: String? = nil
     
     var displayName: String {
         if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty {
             return name
         }
-        return "Person"
+        return "Unnamed"
+    }
+    
+    var isNamed: Bool {
+        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty {
+            return true
+        }
+        return false
     }
     
     var count: Int {
@@ -181,10 +190,10 @@ actor PeopleAnalysisEngine {
         rawClusters.sort { $0.memberAssets.count > $1.memberAssets.count }
         
         var finalClusters: [PersonCluster] = []
-        for (i, c) in rawClusters.enumerated() {
+        for c in rawClusters {
             finalClusters.append(PersonCluster(
                 id: c.id,
-                name: "Person \(i + 1)",
+                name: nil,
                 avatarAsset: c.avatarAsset,
                 avatarFaceBoundingBox: c.avatarBox,
                 assets: c.memberAssets

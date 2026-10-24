@@ -10,32 +10,58 @@ struct FaceAvatarView: View {
     let asset: PHAsset
     let faceBoundingBox: CGRect
     var size: CGFloat = 74
+    var isHeroCard: Bool = false
+    var cornerRadius: CGFloat = 18
     
     @State private var croppedFaceImage: UIImage?
     
     var body: some View {
         ZStack {
             if let image = croppedFaceImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size, height: size)
-                    .clipShape(Circle())
+                if isHeroCard {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: size)
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                } else {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: size, height: size)
+                        .clipShape(Circle())
+                }
             } else {
-                Circle()
-                    .fill(Color(uiColor: .tertiarySystemFill))
-                    .frame(width: size, height: size)
-                Image(systemName: "person.fill")
-                    .font(.system(size: size * 0.45))
-                    .foregroundStyle(.secondary)
+                if isHeroCard {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(Color(uiColor: .tertiarySystemFill))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: size)
+                    Image(systemName: "person.fill")
+                        .font(.system(size: size * 0.35))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Circle()
+                        .fill(Color(uiColor: .tertiarySystemFill))
+                        .frame(width: size, height: size)
+                    Image(systemName: "person.fill")
+                        .font(.system(size: size * 0.45))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .frame(width: size, height: size)
-        .overlay(
-            Circle()
-                .stroke(Color.primary.opacity(0.12), lineWidth: 1.5)
-        )
-        .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
+        .frame(width: isHeroCard ? nil : size, height: size)
+        .overlay {
+            if isHeroCard {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            } else {
+                Circle()
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1.2)
+            }
+        }
+        .shadow(color: .black.opacity(0.04), radius: 3, x: 0, y: 1)
         .task(id: asset.localIdentifier) {
             await loadCroppedFace()
         }

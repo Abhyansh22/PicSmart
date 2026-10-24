@@ -42,6 +42,18 @@ final class PeopleAndFacesViewModel {
     
     var onScanCompleted: (() -> Void)?
     
+    var favoritePeople: [PersonCluster] {
+        personClusters.filter { $0.isFavorite }
+    }
+    
+    var otherPeople: [PersonCluster] {
+        personClusters.filter { !$0.isFavorite }
+    }
+    
+    var blinks: [PersonPhotoItem] {
+        items.filter { $0.hasBlinkedEyes }
+    }
+    
     @ObservationIgnored
     private var scanTask: Task<Void, Never>?
     @ObservationIgnored
@@ -117,7 +129,9 @@ final class PeopleAndFacesViewModel {
                         name: $0.name,
                         avatarAssetId: $0.avatarAsset.localIdentifier,
                         avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
-                        memberAssetIds: $0.assets.map(\.localIdentifier)
+                        memberAssetIds: $0.assets.map(\.localIdentifier),
+                        isFavorite: $0.isFavorite,
+                        keyAssetId: $0.keyAssetId
                     )
                 }
                 try? await PersistentClusterStore.shared.savePersonDTOs(dtos)
@@ -150,7 +164,9 @@ final class PeopleAndFacesViewModel {
                     name: $0.name,
                     avatarAssetId: $0.avatarAsset.localIdentifier,
                     avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
-                    memberAssetIds: $0.assets.map(\.localIdentifier)
+                    memberAssetIds: $0.assets.map(\.localIdentifier),
+                    isFavorite: $0.isFavorite,
+                    keyAssetId: $0.keyAssetId
                 )
             }
             try? await PersistentClusterStore.shared.savePersonDTOs(dtos)
@@ -189,7 +205,9 @@ final class PeopleAndFacesViewModel {
                 name: dto.name,
                 avatarAsset: avatar,
                 avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
-                assets: members
+                assets: members,
+                isFavorite: dto.isFavorite,
+                keyAssetId: dto.keyAssetId
             ))
         }
         
@@ -200,14 +218,34 @@ final class PeopleAndFacesViewModel {
         }
     }
     
-    // MARK: - Rename Person
+    // MARK: - Identity Management
     
     func renamePerson(id: String, newName: String) {
         if let idx = personClusters.firstIndex(where: { $0.id == id }) {
-            personClusters[idx].name = newName
+            personClusters[idx].name = newName.trimmingCharacters(in: .whitespaces)
             Task.detached(priority: .utility) {
                 try? await PersistentClusterStore.shared.updatePersonName(id: id, newName: newName)
             }
+        }
+    }
+    
+    func toggleFavorite(id: String) {
+        if let idx = personClusters.firstIndex(where: { $0.id == id }) {
+            withAnimation(.snappy) {
+                personClusters[idx].isFavorite.toggle()
+            }
+            Task.detached(priority: .utility) {
+                try? await PersistentClusterStore.shared.togglePersonFavorite(id: id)
+            }
+        }
+    }
+    
+    func removePerson(id: String) {
+        withAnimation(.snappy) {
+            personClusters.removeAll { $0.id == id }
+        }
+        Task.detached(priority: .utility) {
+            try? await PersistentClusterStore.shared.removePersonCluster(id: id)
         }
     }
     
