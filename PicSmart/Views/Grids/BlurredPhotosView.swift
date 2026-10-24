@@ -10,7 +10,6 @@ struct BlurredPhotosView: View {
     @Environment(AppModel.self) private var appModel
     @State private var showingDeleteAlert = false
     @State private var isCleaning = false
-    @State private var selectedAssetForPreview = false
     @State private var activeAsset: PHAsset?
     @State private var isSelectionMode = false
     
@@ -25,6 +24,8 @@ struct BlurredPhotosView: View {
     ]
     
     var body: some View {
+        @Bindable var vm = viewModel
+        
         ZStack(alignment: .bottom) {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
@@ -44,68 +45,88 @@ struct BlurredPhotosView: View {
                 )
             } else {
                 ScrollView {
-                    VStack(spacing: 10) {
-                        // Summary & Controls Header (Quick filters shown only in selection mode)
-                        summaryCard
-                            .padding(.horizontal, 16)
-                            .padding(.top, 10)
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        // Native Segmented Filter Tabs
+                        Picker("Blur Filter", selection: $vm.selectedTab) {
+                            ForEach(BlurFilterTab.allCases) { tab in
+                                Text(tabTitle(for: tab)).tag(tab)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
                         
-                        // Media Grid
-                        LazyVGrid(columns: columns, spacing: 2) {
-                            ForEach(viewModel.items) { item in
-                                let isSelected = viewModel.selectedIds.contains(item.id)
-                                
-                                ZStack(alignment: .bottomLeading) {
-                                    ThumbnailView(
-                                        asset: item.asset,
-                                        isSelectionMode: isSelectionMode,
-                                        isSelected: isSelected,
-                                        onToggleSelect: {
+                        // Summary & Selection Actions Header
+                        filterHeader
+                            .padding(.horizontal, 16)
+                        
+                        // Empty state for specific filter if no items match
+                        if viewModel.filteredItems.isEmpty {
+                            ContentUnavailableView(
+                                "No \(viewModel.selectedTab.rawValue) Photos",
+                                systemImage: "checkmark.circle",
+                                description: Text("No photos match this blur level.")
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
+                        } else {
+                            // Media Grid
+                            LazyVGrid(columns: columns, spacing: 2) {
+                                ForEach(viewModel.filteredItems) { item in
+                                    let isSelected = viewModel.selectedIds.contains(item.id)
+                                    
+                                    ZStack(alignment: .bottomLeading) {
+                                        ThumbnailView(
+                                            asset: item.asset,
+                                            isSelectionMode: isSelectionMode,
+                                            isSelected: isSelected,
+                                            onToggleSelect: {
+                                                viewModel.toggleSelection(item.id)
+                                            }
+                                        )
+                                        .aspectRatio(1, contentMode: .fill)
+                                        .clipped()
+                                        
+                                        // Subtle Blur Score Badge
+                                        HStack(spacing: 3) {
+                                            Image(systemName: item.isSevere ? "camera.metering.spot" : "aqi.medium")
+                                                .font(.system(size: 8))
+                                            Text("\(item.blurPercentage)%")
+                                                .font(.system(size: 10, weight: .bold))
+                                        }
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .foregroundStyle(item.isSevere ? Color.orange : Color.secondary)
+                                        .padding(6)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        if isSelectionMode {
                                             viewModel.toggleSelection(item.id)
+                                        } else {
+                                            activeAsset = item.asset
                                         }
-                                    )
-                                    .aspectRatio(1, contentMode: .fill)
-                                    .clipped()
-                                    
-                                    // Subtle Blur Score Badge
-                                    HStack(spacing: 3) {
-                                        Image(systemName: "camera.metering.spot")
-                                            .font(.system(size: 8))
-                                        Text("\(item.blurPercentage)%")
-                                            .font(.system(size: 10, weight: .bold))
                                     }
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                                    .foregroundStyle(item.blurPercentage >= 75 ? Color.orange : Color.secondary)
-                                    .padding(6)
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if isSelectionMode {
-                                        viewModel.toggleSelection(item.id)
-                                    } else {
-                                        activeAsset = item.asset
-                                    }
-                                }
-                                .contextMenu {
-                                    Button {
-                                        viewModel.toggleSelection(item.id)
-                                    } label: {
-                                        Label(isSelected ? "Deselect" : "Select for Deletion", systemImage: isSelected ? "circle" : "checkmark.circle")
-                                    }
-                                    
-                                    Button(role: .destructive) {
-                                        Task {
-                                            try? await appModel.deleteAssets(localIdentifiers: [item.id], categoryTitle: "Blurred Photos")
+                                    .contextMenu {
+                                        Button {
+                                            viewModel.toggleSelection(item.id)
+                                        } label: {
+                                            Label(isSelected ? "Deselect" : "Select for Deletion", systemImage: isSelected ? "circle" : "checkmark.circle")
                                         }
-                                    } label: {
-                                        Label("Delete This Photo", systemImage: "trash")
+                                        
+                                        Button(role: .destructive) {
+                                            Task {
+                                                try? await appModel.deleteAssets(localIdentifiers: [item.id], categoryTitle: "Blurred Photos")
+                                            }
+                                        } label: {
+                                            Label("Delete This Photo", systemImage: "trash")
+                                        }
                                     }
                                 }
                             }
+                            .padding(.bottom, isSelectionMode && viewModel.selectedCount > 0 ? 90 : 24)
                         }
-                        .padding(.bottom, isSelectionMode && viewModel.selectedCount > 0 ? 90 : 20)
                     }
                 }
             }
@@ -126,7 +147,11 @@ struct BlurredPhotosView: View {
                             if !isSelectionMode {
                                 viewModel.deselectAll()
                             } else {
-                                viewModel.selectHighlyBlurredOnly()
+                                if viewModel.selectedTab == .severe {
+                                    viewModel.selectAllInCurrentFilter()
+                                } else {
+                                    viewModel.selectSevereOnly()
+                                }
                             }
                         }
                     }
@@ -164,52 +189,70 @@ struct BlurredPhotosView: View {
         }
     }
     
-    // MARK: - Summary & Quick Filters
+    // MARK: - Filter Header & Controls
     
-    private var summaryCard: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("\(viewModel.items.count) photos with low sharpness")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                
-                Spacer()
+    private func tabTitle(for tab: BlurFilterTab) -> String {
+        switch tab {
+        case .all:
+            return "All (\(viewModel.items.count))"
+        case .severe:
+            return "Severe (\(viewModel.severeCount))"
+        case .soft:
+            return "Soft Focus (\(viewModel.softCount))"
+        }
+    }
+    
+    private var isAllInCurrentFilterSelected: Bool {
+        let current = viewModel.filteredItems
+        guard !current.isEmpty else { return false }
+        return current.allSatisfy { viewModel.selectedIds.contains($0.id) }
+    }
+    
+    private var filterHeader: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(filterSummaryText)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
                 
                 if isSelectionMode && viewModel.selectedSavingsBytes > 0 {
                     Text("Selected ~\(ByteCountFormatter.string(fromByteCount: viewModel.selectedSavingsBytes, countStyle: .file))")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption)
                         .foregroundStyle(.green)
+                } else if viewModel.totalPotentialSavingsBytes > 0 {
+                    Text("Can recover ~\(ByteCountFormatter.string(fromByteCount: viewModel.totalPotentialSavingsBytes, countStyle: .file))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             
-            if isSelectionMode {
-                HStack(spacing: 8) {
-                    Button("Highly Blurry (≥ 75%)") {
-                        viewModel.selectHighlyBlurredOnly()
+            Spacer()
+            
+            if isSelectionMode && !viewModel.filteredItems.isEmpty {
+                Button(isAllInCurrentFilterSelected ? "Deselect All" : "Select All") {
+                    withAnimation(.snappy) {
+                        if isAllInCurrentFilterSelected {
+                            viewModel.deselectCurrentFilter()
+                        } else {
+                            viewModel.selectAllInCurrentFilter()
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.blue)
-                    
-                    Button("Select All") {
-                        viewModel.selectAll()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    
-                    Button("Deselect") {
-                        viewModel.deselectAll()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    
-                    Spacer()
                 }
-                .transition(.opacity)
+                .font(.subheadline.weight(.medium))
             }
         }
-        .padding(12)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, 4)
+    }
+    
+    private var filterSummaryText: String {
+        switch viewModel.selectedTab {
+        case .all:
+            return "\(viewModel.items.count) photos with focus issues"
+        case .severe:
+            return "\(viewModel.severeCount) severely blurred photos"
+        case .soft:
+            return "\(viewModel.softCount) soft focus photos"
+        }
     }
     
     // MARK: - Floating Clean Bar

@@ -8,10 +8,19 @@ import SwiftUI
 import Combine
 import Observation
 
+enum BlurFilterTab: String, CaseIterable, Identifiable {
+    case all = "All"
+    case severe = "Severe"
+    case soft = "Soft Focus"
+    
+    var id: String { rawValue }
+}
+
 @Observable
 @MainActor
 final class BlurredPhotosViewModel {
     var items: [BlurredPhotoItem] = []
+    var selectedTab: BlurFilterTab = .all
     var isScanning: Bool = false
     var isRefreshing: Bool = false
     var hasCompletedScan: Bool = false
@@ -39,15 +48,37 @@ final class BlurredPhotosViewModel {
             .store(in: &cancellables)
     }
     
+    // MARK: - Filtered Properties
+    
+    var filteredItems: [BlurredPhotoItem] {
+        switch selectedTab {
+        case .all:
+            return items
+        case .severe:
+            return items.filter { $0.isSevere }
+        case .soft:
+            return items.filter { !$0.isSevere }
+        }
+    }
+    
+    var severeCount: Int {
+        items.filter { $0.isSevere }.count
+    }
+    
+    var softCount: Int {
+        items.filter { !$0.isSevere }.count
+    }
+    
+    var totalPotentialSavingsBytes: Int64 {
+        items.reduce(0) { $0 + $1.fileSize }
+    }
+    
     /// Incremental insertion of a newly discovered blurred photo
     func appendItem(_ item: BlurredPhotoItem) {
         guard !items.contains(where: { $0.id == item.id }) else { return }
         withAnimation(.snappy) {
             self.items.insert(item, at: 0)
             self.items.sort { $0.blurPercentage > $1.blurPercentage }
-            if item.blurPercentage >= 75 {
-                self.selectedIds.insert(item.id)
-            }
         }
         self.onScanCompleted?()
     }
@@ -100,8 +131,6 @@ final class BlurredPhotosViewModel {
         if !Task.isCancelled {
             self.items = result
             self.hasCompletedScan = true
-            // Pre-select highly blurred photos (blur percentage >= 75%)
-            self.selectedIds = Set(result.filter { $0.blurPercentage >= 75 }.map(\.id))
             self.onScanCompleted?()
         }
         self.isScanning = false
@@ -119,7 +148,6 @@ final class BlurredPhotosViewModel {
         withAnimation(.snappy) {
             self.items = result
             self.hasCompletedScan = true
-            self.selectedIds = Set(result.filter { $0.blurPercentage >= 75 }.map(\.id))
         }
         self.onScanCompleted?()
     }
@@ -151,8 +179,20 @@ final class BlurredPhotosViewModel {
         selectedIds.removeAll()
     }
     
-    func selectHighlyBlurredOnly() {
-        selectedIds = Set(items.filter { $0.blurPercentage >= 75 }.map(\.id))
+    func selectSevereOnly() {
+        selectedIds = Set(items.filter { $0.isSevere }.map(\.id))
+    }
+    
+    func selectAllInCurrentFilter() {
+        for item in filteredItems {
+            selectedIds.insert(item.id)
+        }
+    }
+    
+    func deselectCurrentFilter() {
+        for item in filteredItems {
+            selectedIds.remove(item.id)
+        }
     }
     
     var selectedCount: Int {
