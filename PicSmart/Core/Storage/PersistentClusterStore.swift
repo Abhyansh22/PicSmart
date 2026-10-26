@@ -25,6 +25,7 @@ struct PersistedPersonDTO: Sendable {
     let memberAssetIds: [String]
     var isFavorite: Bool = false
     var keyAssetId: String? = nil
+    var representativeEmbedding: [Float]? = nil
 }
 
 struct FaceEmbeddingDTO: Sendable {
@@ -232,12 +233,13 @@ actor PersistentClusterStore {
     // MARK: - Person & Face Clusters
     
     func savePersonDTOs(_ persons: [PersistedPersonDTO]) throws {
-        // Fetch existing to preserve user custom names, favorites, and key photo choices
+        // Fetch existing to preserve user custom names, favorites, key photo choices, and embeddings
         let descriptor = FetchDescriptor<PersistentPersonCluster>()
         let existing = try modelContext.fetch(descriptor)
         var nameMap = [String: String]()
         var favMap = [String: Bool]()
         var keyMap = [String: String]()
+        var embeddingMap = [String: [Float]]()
         
         // Asset-overlap maps to preserve names/favorites even if cluster indices re-order
         var assetToName = [String: String]()
@@ -263,6 +265,9 @@ actor PersistentClusterStore {
                     assetToKey[aid] = k
                 }
             }
+            if let emb = p.representativeEmbedding {
+                embeddingMap[p.id] = emb
+            }
             modelContext.delete(p)
         }
         
@@ -279,6 +284,8 @@ actor PersistentClusterStore {
             let overlapKey = dto.memberAssetIds.compactMap { assetToKey[$0] }.first
             let finalKey = directKey ?? overlapKey ?? dto.avatarAssetId
             
+            let finalEmbedding = dto.representativeEmbedding ?? embeddingMap[dto.id]
+            
             let cluster = PersistentPersonCluster(
                 id: dto.id,
                 name: finalName,
@@ -286,7 +293,8 @@ actor PersistentClusterStore {
                 avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
                 memberAssetIdentifiers: dto.memberAssetIds,
                 isFavorite: finalFav,
-                keyAssetIdentifier: finalKey
+                keyAssetIdentifier: finalKey,
+                representativeEmbedding: finalEmbedding
             )
             modelContext.insert(cluster)
         }
@@ -306,9 +314,40 @@ actor PersistentClusterStore {
                 avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
                 memberAssetIds: $0.memberAssetIdentifiers,
                 isFavorite: $0.isFavorite,
-                keyAssetId: $0.keyAssetIdentifier
+                keyAssetId: $0.keyAssetIdentifier,
+                representativeEmbedding: $0.representativeEmbedding
             )
         }
+    }
+    
+    // MARK: - Incremental Person Updates
+    
+    func addAssetToPersonCluster(clusterId: String, assetIdentifier: String) throws {
+        let descriptor = FetchDescriptor<PersistentPersonCluster>(
+            predicate: #Predicate { $0.id == clusterId }
+        )
+        if let cluster = try modelContext.fetch(descriptor).first {
+            if !cluster.memberAssetIdentifiers.contains(assetIdentifier) {
+                cluster.memberAssetIdentifiers.append(assetIdentifier)
+                cluster.updatedAt = Date()
+                try modelContext.save()
+            }
+        }
+    }
+    
+    func insertNewPersonCluster(dto: PersistedPersonDTO) throws {
+        let cluster = PersistentPersonCluster(
+            id: dto.id,
+            name: dto.name,
+            avatarAssetIdentifier: dto.avatarAssetId,
+            avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
+            memberAssetIdentifiers: dto.memberAssetIds,
+            isFavorite: dto.isFavorite,
+            keyAssetIdentifier: dto.keyAssetId ?? dto.avatarAssetId,
+            representativeEmbedding: dto.representativeEmbedding
+        )
+        modelContext.insert(cluster)
+        try modelContext.save()
     }
     
     func updatePersonName(id: String, newName: String) throws {

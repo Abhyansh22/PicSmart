@@ -8,11 +8,18 @@ import Photos
 @preconcurrency import Vision
 import CoreGraphics
 import QuartzCore
+import Accelerate
 
 struct AssetFaceResult: @unchecked Sendable {
     let item: PersonPhotoItem?
     let faces: [BiometricFaceItem]
     let newEmbeddings: [FaceEmbeddingDTO]
+}
+
+struct IncrementalFaceMatchResult: Sendable {
+    let matchedClusterId: String?
+    let newCluster: PersonCluster?
+    let asset: PHAsset
 }
 
 struct PersonCluster: Identifiable, Sendable {
@@ -23,6 +30,7 @@ struct PersonCluster: Identifiable, Sendable {
     var assets: [PHAsset]
     var isFavorite: Bool = false
     var keyAssetId: String? = nil
+    var representativeEmbedding: [Float]? = nil
     
     var displayName: String {
         if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -211,7 +219,8 @@ actor PeopleAnalysisEngine {
                 avatarFaceBoundingBox: identity.avatarFace.boundingBox,
                 assets: memberAssets,
                 isFavorite: matchedFav,
-                keyAssetId: matchedKey
+                keyAssetId: matchedKey,
+                representativeEmbedding: identity.centroid
             ))
             clusterIndex += 1
         }
@@ -233,7 +242,8 @@ actor PeopleAnalysisEngine {
                     avatarFaceBoundingBox: firstFace.boundingBox,
                     assets: [firstFace.asset],
                     isFavorite: isFav,
-                    keyAssetId: assetId
+                    keyAssetId: assetId,
+                    representativeEmbedding: firstFace.embedding
                 ))
                 clusterIndex += 1
             }
@@ -387,5 +397,107 @@ actor PeopleAnalysisEngine {
         let width = maxX - minX
         guard width > 0 else { return 0.25 }
         return Double(height / width)
+    }
+    
+    // MARK: - Incremental Face Clustering
+    
+    /// Incrementally analyzes a newly added photo.
+    /// If a face matches an existing cluster's centroid (cosine distance <= 0.40), it updates the existing cluster.
+    /// Otherwise, if a distinct face is detected, it creates a new person cluster.
+    func processNewAssetIncrementally(
+        _ asset: PHAsset,
+        existingClusters: [PersistedPersonDTO]
+    ) async -> IncrementalFaceMatchResult? {
+        guard asset.mediaType == .image else { return nil }
+        
+        let faceResult = await extractFacesAndBiometrics(for: asset)
+        guard let item = faceResult.item, item.faceCount > 0, !faceResult.faces.isEmpty else {
+            return nil
+        }
+        
+        // Save new embeddings to disk cache
+        if !faceResult.newEmbeddings.isEmpty {
+            let embeddingsToSave = faceResult.newEmbeddings
+            Task.detached(priority: .utility) {
+                try? await PersistentClusterStore.shared.saveFaceEmbeddings(embeddingsToSave)
+            }
+        }
+        
+        // Match the most prominent face in the photo
+        guard let primaryFace = faceResult.faces.max(by: { $0.captureQuality < $1.captureQuality }) else {
+            return nil
+        }
+        
+        var bestMatchClusterId: String? = nil
+        var minDistance: Float = Float.greatestFiniteMagnitude
+        let threshold: Float = 0.40 // Standard MobileFaceNet cosine distance radius
+        
+        for cluster in existingClusters {
+            guard let clusterEmbedding = cluster.representativeEmbedding,
+                  clusterEmbedding.count == primaryFace.embedding.count else {
+                continue
+            }
+            
+            // Cosine distance = 1.0 - dotProduct (both are L2-normalized)
+            var dot: Float = 0.0
+            vDSP_dotpr(primaryFace.embedding, 1, clusterEmbedding, 1, &dot, vDSP_Length(primaryFace.embedding.count))
+            let distance = 1.0 - dot
+            
+            if distance < minDistance {
+                minDistance = distance
+                if distance <= threshold {
+                    bestMatchClusterId = cluster.id
+                }
+            }
+        }
+        
+        if let matchedId = bestMatchClusterId {
+            // Found existing cluster match!
+            Task.detached(priority: .utility) {
+                try? await PersistentClusterStore.shared.addAssetToPersonCluster(
+                    clusterId: matchedId,
+                    assetIdentifier: asset.localIdentifier
+                )
+            }
+            return IncrementalFaceMatchResult(
+                matchedClusterId: matchedId,
+                newCluster: nil,
+                asset: asset
+            )
+        } else {
+            // New distinct person cluster
+            let newId = "person_\(UUID().uuidString.prefix(8))"
+            let newCluster = PersonCluster(
+                id: newId,
+                name: nil,
+                avatarAsset: asset,
+                avatarFaceBoundingBox: primaryFace.boundingBox,
+                assets: [asset],
+                isFavorite: false,
+                keyAssetId: asset.localIdentifier,
+                representativeEmbedding: primaryFace.embedding
+            )
+            
+            let dto = PersistedPersonDTO(
+                id: newId,
+                name: nil,
+                avatarAssetId: asset.localIdentifier,
+                avatarFaceBoundingBox: primaryFace.boundingBox,
+                memberAssetIds: [asset.localIdentifier],
+                isFavorite: false,
+                keyAssetId: asset.localIdentifier,
+                representativeEmbedding: primaryFace.embedding
+            )
+            
+            Task.detached(priority: .utility) {
+                try? await PersistentClusterStore.shared.insertNewPersonCluster(dto: dto)
+            }
+            
+            return IncrementalFaceMatchResult(
+                matchedClusterId: nil,
+                newCluster: newCluster,
+                asset: asset
+            )
+        }
     }
 }

@@ -20,6 +20,7 @@ final class PersistentPersonCluster {
     var memberAssetIdentifiers: [String]
     var isFavorite: Bool
     var keyAssetIdentifier: String?
+    @Attribute(.externalStorage) var representativeEmbeddingData: Data?
     var updatedAt: Date
     
     init(
@@ -29,7 +30,8 @@ final class PersistentPersonCluster {
         avatarFaceBoundingBox: CGRect,
         memberAssetIdentifiers: [String],
         isFavorite: Bool = false,
-        keyAssetIdentifier: String? = nil
+        keyAssetIdentifier: String? = nil,
+        representativeEmbedding: [Float]? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,10 +43,27 @@ final class PersistentPersonCluster {
         self.memberAssetIdentifiers = memberAssetIdentifiers
         self.isFavorite = isFavorite
         self.keyAssetIdentifier = keyAssetIdentifier
+        
+        if let embedding = representativeEmbedding, !embedding.isEmpty {
+            self.representativeEmbeddingData = embedding.withUnsafeBufferPointer { buffer in
+                Data(buffer: buffer)
+            }
+        } else {
+            self.representativeEmbeddingData = nil
+        }
+        
         self.updatedAt = Date()
     }
     
     var avatarFaceBoundingBox: CGRect {
         CGRect(x: avatarFaceX, y: avatarFaceY, width: avatarFaceWidth, height: avatarFaceHeight)
+    }
+    
+    var representativeEmbedding: [Float]? {
+        guard let data = representativeEmbeddingData,
+              data.count >= 128 * MemoryLayout<Float>.size else { return nil }
+        return data.withUnsafeBytes { rawBuffer in
+            Array(rawBuffer.bindMemory(to: Float.self).prefix(128))
+        }
     }
 }

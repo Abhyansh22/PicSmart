@@ -174,7 +174,7 @@ final class AnalysisPipelineCoordinator {
         case .blurredPhotos:
             return appModel.blurredPhotosViewModel.hasCompletedScan && (appModel.counts[.blurredPhotos] != nil || !appModel.blurredPhotosViewModel.items.isEmpty)
         case .people:
-            return appModel.peopleAndFacesViewModel.hasCompletedScan && (appModel.counts[.people] != nil || !appModel.peopleAndFacesViewModel.items.isEmpty)
+            return appModel.peopleAndFacesViewModel.hasCompletedScan && (appModel.counts[.people] != nil || !appModel.peopleAndFacesViewModel.personClusters.isEmpty)
         case .similarPhotos:
             return appModel.similarPhotosViewModel.hasCompletedScan && (appModel.counts[.similarPhotos] != nil || !appModel.similarPhotosViewModel.groups.isEmpty)
         default:

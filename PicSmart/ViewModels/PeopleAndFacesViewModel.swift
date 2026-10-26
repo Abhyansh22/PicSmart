@@ -80,7 +80,7 @@ final class PeopleAndFacesViewModel {
     func startScanIfNeeded() {
         let authStatus = PhotoLibraryService.shared.authorizationStatus
         guard authStatus == .authorized || authStatus == .limited else { return }
-        if !isScanning && (!hasCompletedScan || items.isEmpty) {
+        if !isScanning && !hasCompletedScan {
             startScan()
         }
     }
@@ -131,7 +131,8 @@ final class PeopleAndFacesViewModel {
                         avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
                         memberAssetIds: $0.assets.map(\.localIdentifier),
                         isFavorite: $0.isFavorite,
-                        keyAssetId: $0.keyAssetId
+                        keyAssetId: $0.keyAssetId,
+                        representativeEmbedding: $0.representativeEmbedding
                     )
                 }
                 try? await PersistentClusterStore.shared.savePersonDTOs(dtos)
@@ -166,7 +167,8 @@ final class PeopleAndFacesViewModel {
                     avatarFaceBoundingBox: $0.avatarFaceBoundingBox,
                     memberAssetIds: $0.assets.map(\.localIdentifier),
                     isFavorite: $0.isFavorite,
-                    keyAssetId: $0.keyAssetId
+                    keyAssetId: $0.keyAssetId,
+                    representativeEmbedding: $0.representativeEmbedding
                 )
             }
             try? await PersistentClusterStore.shared.savePersonDTOs(dtos)
@@ -196,10 +198,17 @@ final class PeopleAndFacesViewModel {
         }
         
         var hydrated: [PersonCluster] = []
+        var uniqueAssets = [String: PHAsset]()
+        
         for dto in dtos {
             guard let avatar = map[dto.avatarAssetId] else { continue }
             let members = dto.memberAssetIds.compactMap { map[$0] }
             guard !members.isEmpty else { continue }
+            
+            for m in members {
+                uniqueAssets[m.localIdentifier] = m
+            }
+            
             hydrated.append(PersonCluster(
                 id: dto.id,
                 name: dto.name,
@@ -207,15 +216,58 @@ final class PeopleAndFacesViewModel {
                 avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
                 assets: members,
                 isFavorite: dto.isFavorite,
-                keyAssetId: dto.keyAssetId
+                keyAssetId: dto.keyAssetId,
+                representativeEmbedding: dto.representativeEmbedding
             ))
         }
         
         if !hydrated.isEmpty {
             self.personClusters = hydrated
+            self.items = uniqueAssets.values.map { asset in
+                PersonPhotoItem(
+                    asset: asset,
+                    faceCount: 1,
+                    hasBlinkedEyes: false,
+                    averageQuality: 1.0,
+                    fileSize: asset.primaryResourceFileSize ?? 3_500_000
+                )
+            }
             self.hasCompletedScan = true
             self.onScanCompleted?()
         }
+    }
+    
+    // MARK: - Incremental Updates
+    
+    func applyIncrementalFaceResult(_ result: IncrementalFaceMatchResult) {
+        withAnimation(.snappy) {
+            if let matchedId = result.matchedClusterId,
+               let idx = personClusters.firstIndex(where: { $0.id == matchedId }) {
+                if !personClusters[idx].assets.contains(where: { $0.localIdentifier == result.asset.localIdentifier }) {
+                    personClusters[idx].assets.append(result.asset)
+                }
+            } else if let newCluster = result.newCluster {
+                personClusters.append(newCluster)
+                personClusters.sort {
+                    if $0.isFavorite != $1.isFavorite {
+                        return $0.isFavorite && !$1.isFavorite
+                    }
+                    return $0.assets.count > $1.assets.count
+                }
+            }
+            
+            if !items.contains(where: { $0.id == result.asset.localIdentifier }) {
+                let newItem = PersonPhotoItem(
+                    asset: result.asset,
+                    faceCount: 1,
+                    hasBlinkedEyes: false,
+                    averageQuality: 1.0,
+                    fileSize: result.asset.primaryResourceFileSize ?? 3_500_000
+                )
+                items.insert(newItem, at: 0)
+            }
+        }
+        self.onScanCompleted?()
     }
     
     // MARK: - Identity Management

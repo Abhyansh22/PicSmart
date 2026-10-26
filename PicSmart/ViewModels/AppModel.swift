@@ -210,6 +210,12 @@ final class AppModel {
                         }
                     }
                 }
+                
+                // 3. Incremental People & Faces Clustering
+                let existingDTOs = (try? await PersistentClusterStore.shared.loadPersonDTOs()) ?? []
+                if let faceResult = await PeopleAnalysisEngine.shared.processNewAssetIncrementally(asset, existingClusters: existingDTOs) {
+                    self.peopleAndFacesViewModel.applyIncrementalFaceResult(faceResult)
+                }
             }
         }
     }
