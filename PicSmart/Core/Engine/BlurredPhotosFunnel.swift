@@ -35,6 +35,35 @@ actor BlurredPhotosFunnel {
         return item
     }
     
+    /// Rapidly hydrates previously verified blurred photos from SwiftData cache without running any Vision models
+    func loadCachedBlurredItems() async -> [BlurredPhotoItem] {
+        let cachedMap = await FeatureVectorStore.shared.loadAllSignatures()
+        let blurredEntries = cachedMap.filter { $0.value.sharpnessScore >= 40.0 && $0.value.sharpnessScore <= 100.0 }
+        guard !blurredEntries.isEmpty else { return [] }
+        
+        let ids = Array(blurredEntries.keys)
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        var assetMap = [String: PHAsset]()
+        fetchResult.enumerateObjects { asset, _, _ in
+            assetMap[asset.localIdentifier] = asset
+        }
+        
+        var items: [BlurredPhotoItem] = []
+        for (id, dto) in blurredEntries {
+            guard let asset = assetMap[id] else { continue }
+            let pct = Int(dto.sharpnessScore)
+            let size = asset.primaryResourceFileSize ?? 3_500_000
+            items.append(BlurredPhotoItem(
+                asset: asset,
+                sharpnessScore: dto.sharpnessScore,
+                blurPercentage: pct,
+                fileSize: size
+            ))
+        }
+        items.sort { $0.blurPercentage > $1.blurPercentage }
+        return items
+    }
+    
     func scan(progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil) async -> [BlurredPhotoItem] {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)

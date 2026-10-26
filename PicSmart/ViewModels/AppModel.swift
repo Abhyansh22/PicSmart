@@ -73,6 +73,8 @@ final class AppModel {
             let sim = try? await PersistentClusterStore.shared.loadClusters(for: .similarPhotos)
             let dupVid = try? await PersistentClusterStore.shared.loadClusters(for: .duplicateVideos)
             let persons = try? await PersistentClusterStore.shared.loadPersonDTOs()
+            let blurred = await BlurredPhotosFunnel.shared.loadCachedBlurredItems()
+            let largeVideoMeta = try? await PersistentClusterStore.shared.loadLargeVideoMetadata()
             let lifetime = (try? await PersistentClusterStore.shared.totalLifetimeBytesSaved()) ?? 0
             
             if let dups, !dups.isEmpty {
@@ -86,6 +88,16 @@ final class AppModel {
             }
             if let persons, !persons.isEmpty {
                 self.peopleAndFacesViewModel.hydrate(from: persons)
+            }
+            if !blurred.isEmpty {
+                self.blurredPhotosViewModel.hydrate(from: blurred)
+            }
+            if let largeVideoMeta {
+                self.largeVideosViewModel.hydrateLargeVideos(
+                    sortedIds: largeVideoMeta.sortedAssetIds,
+                    sizes: largeVideoMeta.fileSizes
+                )
+                await MediaAnalyzerEngine.shared.setCachedVideoSizes(largeVideoMeta.fileSizes)
             }
             self.lifetimeBytesSaved = lifetime
             self.refreshCounts()

@@ -110,6 +110,27 @@ final class MediaCollectionViewModel {
         onScanCompleted?()
     }
     
+    // MARK: - Cold Launch Hydration
+    
+    func hydrateLargeVideos(sortedIds: [String], sizes: [String: Int64]) {
+        guard sortedLargeVideoAssets.isEmpty && !hasLoaded else { return }
+        guard !sortedIds.isEmpty else { return }
+        
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: sortedIds, options: nil)
+        var map = [String: PHAsset]()
+        fetch.enumerateObjects { asset, _, _ in
+            map[asset.localIdentifier] = asset
+        }
+        
+        let hydrated = sortedIds.compactMap { map[$0] }
+        guard !hydrated.isEmpty else { return }
+        
+        self.sortedLargeVideoAssets = hydrated
+        self.fileSizes = sizes
+        self.hasLoaded = true
+        self.onScanCompleted?()
+    }
+    
     func load() {
         guard !isLoading else { return }
         loadTask?.cancel()
@@ -181,6 +202,17 @@ final class MediaCollectionViewModel {
             self.progressMessage = nil
             self.progress = nil
             self.onScanCompleted?()
+            
+            if !Task.isCancelled && !self.sortedLargeVideoAssets.isEmpty {
+                let idsToSave = self.sortedLargeVideoAssets.map(\.localIdentifier)
+                let sizesToSave = self.fileSizes
+                Task.detached(priority: .utility) {
+                    try? await PersistentClusterStore.shared.saveLargeVideoMetadata(
+                        sortedAssetIds: idsToSave,
+                        fileSizes: sizesToSave
+                    )
+                }
+            }
             
         default:
             self.isLoading = false

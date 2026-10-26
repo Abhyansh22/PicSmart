@@ -111,6 +111,43 @@ actor PersistentClusterStore {
         }
     }
     
+    // MARK: - Large Video Metadata Persistence
+    
+    func saveLargeVideoMetadata(sortedAssetIds: [String], fileSizes: [String: Int64]) throws {
+        let catRaw = GalleryCategory.largeVideos.rawValue
+        let descriptor = FetchDescriptor<PersistentAssetCluster>(
+            predicate: #Predicate { $0.categoryRaw == catRaw }
+        )
+        let existing = try modelContext.fetch(descriptor)
+        for cluster in existing {
+            modelContext.delete(cluster)
+        }
+        
+        guard !sortedAssetIds.isEmpty else {
+            try modelContext.save()
+            return
+        }
+        
+        let cluster = PersistentAssetCluster(
+            id: "large_videos_cache",
+            categoryRaw: catRaw,
+            assetIdentifiers: sortedAssetIds,
+            fileSizes: fileSizes
+        )
+        modelContext.insert(cluster)
+        try modelContext.save()
+    }
+    
+    func loadLargeVideoMetadata() throws -> (sortedAssetIds: [String], fileSizes: [String: Int64])? {
+        let catRaw = GalleryCategory.largeVideos.rawValue
+        let descriptor = FetchDescriptor<PersistentAssetCluster>(
+            predicate: #Predicate { $0.categoryRaw == catRaw }
+        )
+        guard let cluster = try modelContext.fetch(descriptor).first,
+              !cluster.assetIdentifiers.isEmpty else { return nil }
+        return (cluster.assetIdentifiers, cluster.fileSizes)
+    }
+    
     // MARK: - Deletion Pruning & Strict Cluster Dissolution
     
     /// Returns all asset identifiers currently participating in any cluster
@@ -139,8 +176,9 @@ actor PersistentClusterStore {
             // 1. Remove deleted identifiers
             cluster.assetIdentifiers.removeAll { deletedIds.contains($0) }
             
-            // 2. Strict Dissolution Rule: If fewer than 2 assets remain, delete cluster!
-            if cluster.assetIdentifiers.count < 2 {
+            // 2. Strict Dissolution Rule: If fewer than 2 assets remain (or empty for large videos), delete cluster!
+            let shouldDissolve = (cluster.categoryRaw == GalleryCategory.largeVideos.rawValue) ? cluster.assetIdentifiers.isEmpty : cluster.assetIdentifiers.count < 2
+            if shouldDissolve {
                 modelContext.delete(cluster)
             } else {
                 // 3. Keeper and BestShot Fallback

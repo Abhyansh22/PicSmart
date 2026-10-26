@@ -83,6 +83,17 @@ final class BlurredPhotosViewModel {
         self.onScanCompleted?()
     }
     
+    // MARK: - Cold Launch Hydration
+    
+    func hydrate(from hydratedItems: [BlurredPhotoItem]) {
+        guard items.isEmpty && !hasCompletedScan else { return }
+        guard !hydratedItems.isEmpty else { return }
+        
+        self.items = hydratedItems
+        self.hasCompletedScan = true
+        self.onScanCompleted?()
+    }
+    
     func onAppear() {
         isActive = true
     }
