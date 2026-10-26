@@ -134,9 +134,6 @@ struct HomeView: View {
             }
         }
         .onAppear {
-            if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {
-                appModel.onPhotoAccessGranted()
-            }
             if !hasCompletedOnboarding {
                 showingOnboarding = true
             }

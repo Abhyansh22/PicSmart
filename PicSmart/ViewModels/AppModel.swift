@@ -88,9 +88,11 @@ final class AppModel {
             }
             if let persons, !persons.isEmpty {
                 self.peopleAndFacesViewModel.hydrate(from: persons)
+                self.counts[.people] = self.peopleAndFacesViewModel.totalCount
             }
             if !blurred.isEmpty {
                 self.blurredPhotosViewModel.hydrate(from: blurred)
+                self.counts[.blurredPhotos] = self.blurredPhotosViewModel.totalCount
             }
             if let largeVideoMeta {
                 self.largeVideosViewModel.hydrateLargeVideos(
@@ -121,14 +123,14 @@ final class AppModel {
         if blurredPhotosViewModel.items.isEmpty {
             blurredPhotosViewModel.hasCompletedScan = false
         }
-        if peopleAndFacesViewModel.items.isEmpty {
+        if peopleAndFacesViewModel.personClusters.isEmpty {
             peopleAndFacesViewModel.hasCompletedScan = false
         }
         
         hydratePersistedClusters()
         refreshCounts()
         runDeltaSync()
-        AnalysisPipelineCoordinator.shared.startProactiveBackgroundScan(appModel: self, force: true)
+        AnalysisPipelineCoordinator.shared.startProactiveBackgroundScan(appModel: self, force: false)
     }
     
     // MARK: - Incremental Delta Synchronization
@@ -230,7 +232,9 @@ final class AppModel {
         case .blurredPhotos:
             return blurredPhotosViewModel.hasCompletedScan ? blurredPhotosViewModel.totalCount : counts[.blurredPhotos]
         case .people:
-            return peopleAndFacesViewModel.hasCompletedScan ? peopleAndFacesViewModel.totalCount : counts[.people]
+            return (peopleAndFacesViewModel.hasCompletedScan || !peopleAndFacesViewModel.personClusters.isEmpty)
+                ? peopleAndFacesViewModel.totalCount
+                : counts[.people]
         case .largeVideos:
             return largeVideosViewModel.hasLoaded ? largeVideosViewModel.totalCount : counts[.largeVideos]
         case .duplicatePhotos:

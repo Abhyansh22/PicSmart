@@ -60,13 +60,7 @@ final class PeopleAndFacesViewModel {
     private var cancellables = Set<AnyCancellable>()
     
     init() {
-        PhotoLibraryService.shared.libraryChangePublisher
-            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, self.isActive else { return }
-                self.startScan()
-            }
-            .store(in: &cancellables)
+        // Delta changes are handled incrementally via LibraryDeltaTracker in AppModel
     }
     
     func onAppear() {
@@ -80,9 +74,12 @@ final class PeopleAndFacesViewModel {
     func startScanIfNeeded() {
         let authStatus = PhotoLibraryService.shared.authorizationStatus
         guard authStatus == .authorized || authStatus == .limited else { return }
-        if !isScanning && !hasCompletedScan {
-            startScan()
+        guard !isScanning else { return }
+        if hasCompletedScan || !personClusters.isEmpty {
+            hasCompletedScan = true
+            return
         }
+        startScan()
     }
     
     func startScan() {
@@ -102,12 +99,20 @@ final class PeopleAndFacesViewModel {
             return
         }
         
+        if !personClusters.isEmpty {
+            hasCompletedScan = true
+            isScanning = false
+            progress = nil
+            statusMessage = nil
+            return
+        }
+        
         isScanning = true
         hasCompletedScan = false
         progress = AnalysisProgress(completed: 0, total: 1, stage: "Checking library…")
         statusMessage = "Analyzing people and faces…"
         
-        let result = await PeopleAnalysisEngine.shared.scan { [weak self] prog in
+        let result = await PeopleAnalysisEngine.shared.scan(force: false) { [weak self] prog in
             Task { @MainActor in
                 self?.progress = prog
                 self?.statusMessage = prog.stage
@@ -148,7 +153,7 @@ final class PeopleAndFacesViewModel {
         isRefreshing = true
         defer { isRefreshing = false }
         
-        let result = await PeopleAnalysisEngine.shared.scan()
+        let result = await PeopleAnalysisEngine.shared.scan(force: true)
         guard !Task.isCancelled else { return }
         withAnimation(.snappy) {
             self.personClusters = result.personClusters
@@ -187,7 +192,7 @@ final class PeopleAndFacesViewModel {
     // MARK: - Cold Launch Hydration
     
     func hydrate(from dtos: [PersistedPersonDTO]) {
-        guard personClusters.isEmpty && !hasCompletedScan else { return }
+        guard personClusters.isEmpty else { return }
         let allIds = dtos.flatMap { $0.memberAssetIds + [$0.avatarAssetId] }
         guard !allIds.isEmpty else { return }
         

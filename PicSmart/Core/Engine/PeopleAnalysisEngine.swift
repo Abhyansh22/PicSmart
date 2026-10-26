@@ -73,7 +73,16 @@ actor PeopleAnalysisEngine {
     
     private init() {}
     
-    func scan(progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil) async -> PeopleScanOutput {
+    func scan(force: Bool = false, progressHandler: (@Sendable (AnalysisProgress) -> Void)? = nil) async -> PeopleScanOutput {
+        // Fast Path: Immediately return cached clusters if persisted in SwiftData (0ms cold start)
+        if !force {
+            if let persistedDTOs = try? await PersistentClusterStore.shared.loadPersonDTOs(), !persistedDTOs.isEmpty {
+                if let cachedOutput = await hydratePersistedClusters(from: persistedDTOs) {
+                    return cachedOutput
+                }
+            }
+        }
+        
         // Prewarm Neural Engine model in background
         FaceEmbeddingEngine.shared.prewarm()
         
@@ -499,5 +508,56 @@ actor PeopleAnalysisEngine {
                 asset: asset
             )
         }
+    }
+    
+    // MARK: - Fast Hydration from SwiftData
+    
+    private func hydratePersistedClusters(from dtos: [PersistedPersonDTO]) async -> PeopleScanOutput? {
+        let allIds = dtos.flatMap { $0.memberAssetIds + [$0.avatarAssetId] }
+        guard !allIds.isEmpty else { return nil }
+        
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: allIds, options: nil)
+        var map = [String: PHAsset]()
+        fetch.enumerateObjects { asset, _, _ in
+            map[asset.localIdentifier] = asset
+        }
+        
+        var hydrated: [PersonCluster] = []
+        var uniqueAssets = [String: PHAsset]()
+        
+        for dto in dtos {
+            guard let avatar = map[dto.avatarAssetId] else { continue }
+            let members = dto.memberAssetIds.compactMap { map[$0] }
+            guard !members.isEmpty else { continue }
+            
+            for m in members {
+                uniqueAssets[m.localIdentifier] = m
+            }
+            
+            hydrated.append(PersonCluster(
+                id: dto.id,
+                name: dto.name,
+                avatarAsset: avatar,
+                avatarFaceBoundingBox: dto.avatarFaceBoundingBox,
+                assets: members,
+                isFavorite: dto.isFavorite,
+                keyAssetId: dto.keyAssetId,
+                representativeEmbedding: dto.representativeEmbedding
+            ))
+        }
+        
+        guard !hydrated.isEmpty else { return nil }
+        
+        let photoItems = uniqueAssets.values.map { asset in
+            PersonPhotoItem(
+                asset: asset,
+                faceCount: 1,
+                hasBlinkedEyes: false,
+                averageQuality: 1.0,
+                fileSize: asset.primaryResourceFileSize ?? 3_500_000
+            )
+        }
+        
+        return PeopleScanOutput(personClusters: hydrated, allPhotoItems: photoItems)
     }
 }
