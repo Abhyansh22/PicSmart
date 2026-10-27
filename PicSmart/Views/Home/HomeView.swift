@@ -133,6 +133,11 @@ struct HomeView: View {
                 appModel.runDeltaSync()
             }
         }
+        .onChange(of: hasCompletedOnboarding) { _, newValue in
+            if !newValue {
+                showingOnboarding = true
+            }
+        }
         .onAppear {
             if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {
                 appModel.onPhotoAccessGranted()

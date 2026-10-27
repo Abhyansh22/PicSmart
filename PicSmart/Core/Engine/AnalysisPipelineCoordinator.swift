@@ -96,6 +96,14 @@ final class AnalysisPipelineCoordinator {
         }
     }
     
+    // MARK: - Cancellation
+    
+    func cancel() {
+        backgroundPipelineTask?.cancel()
+        backgroundPipelineTask = nil
+        activeCategory = nil
+    }
+    
     // MARK: - Proactive Background Pipeline
     
     /// Starts sequential background analysis across all heavy categories.
