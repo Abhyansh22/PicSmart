@@ -42,6 +42,7 @@ actor PersistentClusterStore {
     static let shared: PersistentClusterStore = {
         do {
             let schema = Schema([
+                CachedBlurRecord.self,
                 CachedVisualSignature.self,
                 PersistentAssetCluster.self,
                 CleanupSessionRecord.self,
@@ -195,6 +196,30 @@ actor PersistentClusterStore {
                 for id in deletedIds { sizes.removeValue(forKey: id) }
                 cluster.fileSizesJSON = try? JSONEncoder().encode(sizes)
                 cluster.updatedAt = Date()
+            }
+        }
+        
+        // Prune blur records for deleted assets
+        let blurDescriptor = FetchDescriptor<CachedBlurRecord>()
+        if let blurRecords = try? modelContext.fetch(blurDescriptor) {
+            for record in blurRecords where deletedIds.contains(record.localIdentifier) {
+                modelContext.delete(record)
+            }
+        }
+        
+        // Prune face embeddings for deleted assets
+        let faceDescriptor = FetchDescriptor<CachedFaceEmbedding>()
+        if let faceRecords = try? modelContext.fetch(faceDescriptor) {
+            for record in faceRecords where deletedIds.contains(record.assetIdentifier) {
+                modelContext.delete(record)
+            }
+        }
+        
+        // Prune visual signatures for deleted assets
+        let sigDescriptor = FetchDescriptor<CachedVisualSignature>()
+        if let sigRecords = try? modelContext.fetch(sigDescriptor) {
+            for record in sigRecords where deletedIds.contains(record.localIdentifier) {
+                modelContext.delete(record)
             }
         }
         
@@ -421,5 +446,51 @@ actor PersistentClusterStore {
             grouped[item.assetIdentifier, default: []].append(item)
         }
         return grouped
+    }
+    
+    // MARK: - Blur Records Persistence
+    
+    func saveBlurRecords(_ records: [BlurRecordDTO]) throws {
+        guard !records.isEmpty else { return }
+        for dto in records {
+            let entity = CachedBlurRecord(
+                localIdentifier: dto.localIdentifier,
+                blurPercentage: dto.blurPercentage,
+                isSevere: dto.isSevere,
+                evaluatedAt: dto.evaluatedAt,
+                modificationTime: dto.modificationTime
+            )
+            modelContext.insert(entity)
+        }
+        try modelContext.save()
+    }
+    
+    func loadAllBlurRecords() throws -> [String: BlurRecordDTO] {
+        var descriptor = FetchDescriptor<CachedBlurRecord>()
+        descriptor.propertiesToFetch = [
+            \.localIdentifier,
+            \.blurPercentage,
+            \.isSevere,
+            \.evaluatedAt,
+            \.modificationTime
+        ]
+        guard let records = try? modelContext.fetch(descriptor) else { return [:] }
+        var map = [String: BlurRecordDTO]()
+        map.reserveCapacity(records.count)
+        for r in records {
+            map[r.localIdentifier] = BlurRecordDTO(
+                localIdentifier: r.localIdentifier,
+                blurPercentage: r.blurPercentage,
+                isSevere: r.isSevere,
+                evaluatedAt: r.evaluatedAt,
+                modificationTime: r.modificationTime
+            )
+        }
+        return map
+    }
+    
+    func clearBlurRecords() throws {
+        try modelContext.delete(model: CachedBlurRecord.self)
+        try modelContext.save()
     }
 }

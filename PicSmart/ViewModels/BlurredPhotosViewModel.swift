@@ -85,12 +85,12 @@ final class BlurredPhotosViewModel {
     
     // MARK: - Cold Launch Hydration
     
-    func hydrate(from hydratedItems: [BlurredPhotoItem]) {
+    func hydrate(from hydratedItems: [BlurredPhotoItem], isFullyEvaluated: Bool = false) {
         guard items.isEmpty && !hasCompletedScan else { return }
         guard !hydratedItems.isEmpty else { return }
         
         self.items = hydratedItems
-        self.hasCompletedScan = true
+        self.hasCompletedScan = isFullyEvaluated
         self.onScanCompleted?()
     }
     
@@ -105,7 +105,7 @@ final class BlurredPhotosViewModel {
     func startScanIfNeeded() {
         let authStatus = PhotoLibraryService.shared.authorizationStatus
         guard authStatus == .authorized || authStatus == .limited else { return }
-        if !isScanning && (!hasCompletedScan || items.isEmpty) {
+        if !isScanning && !hasCompletedScan {
             startScan()
         }
     }
@@ -127,6 +127,13 @@ final class BlurredPhotosViewModel {
             return
         }
         
+        guard !isScanning else {
+            while isScanning {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            return
+        }
+        
         isScanning = true
         hasCompletedScan = false
         progress = AnalysisProgress(completed: 0, total: 1, stage: "Checking library…")
@@ -139,7 +146,20 @@ final class BlurredPhotosViewModel {
             }
         }
         
-        if !Task.isCancelled {
+        if Task.isCancelled {
+            // Interrupted by priority preemption or lifecycle event:
+            // Preserve all discovered blurred photos up to this checkpoint!
+            if !result.isEmpty {
+                self.items = result
+            } else {
+                let cached = await BlurredPhotosFunnel.shared.loadCachedBlurredItems()
+                if !cached.isEmpty {
+                    self.items = cached
+                }
+            }
+            self.hasCompletedScan = false
+            self.onScanCompleted?()
+        } else {
             self.items = result
             self.hasCompletedScan = true
             self.onScanCompleted?()
@@ -167,9 +187,19 @@ final class BlurredPhotosViewModel {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
-        hasCompletedScan = true
+        hasCompletedScan = false
         progress = nil
         statusMessage = nil
+        
+        // Immediately load any cached blurred items from checkpoints so the UI shows discovered items
+        Task { [weak self] in
+            let cached = await BlurredPhotosFunnel.shared.loadCachedBlurredItems()
+            guard let self, !self.hasCompletedScan else { return }
+            if !cached.isEmpty {
+                self.items = cached
+                self.onScanCompleted?()
+            }
+        }
     }
     
     // MARK: - Selection

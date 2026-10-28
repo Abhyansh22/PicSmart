@@ -40,7 +40,9 @@ final class GroupedScanViewModel {
     }
     
     func startScanIfNeeded() {
-        if !isScanning && (!hasCompletedScan || groups.isEmpty) {
+        let authStatus = PhotoLibraryService.shared.authorizationStatus
+        guard authStatus == .authorized || authStatus == .limited else { return }
+        if !isScanning && !hasCompletedScan {
             startScan()
         }
     }
@@ -119,7 +121,13 @@ final class GroupedScanViewModel {
             result = []
         }
         
-        if !Task.isCancelled {
+        if Task.isCancelled {
+            if !result.isEmpty {
+                self.groups = result
+            }
+            self.hasCompletedScan = false
+            self.onScanCompleted?()
+        } else {
             self.groups = result
             self.hasCompletedScan = true
             self.onScanCompleted?()
@@ -165,7 +173,7 @@ final class GroupedScanViewModel {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
-        hasCompletedScan = true
+        hasCompletedScan = false
         progress = nil
         statusMessage = nil
     }

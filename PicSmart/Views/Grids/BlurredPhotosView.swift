@@ -34,8 +34,7 @@ struct BlurredPhotosView: View {
                 ScanningProgressView(
                     category: .blurredPhotos,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.statusMessage ?? "Analyzing sharpness…",
-                    onCancel: { viewModel.cancel() }
+                    statusMessage: viewModel.statusMessage ?? "Analyzing sharpness…"
                 )
             } else if viewModel.items.isEmpty {
                 ContentUnavailableView(

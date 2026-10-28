@@ -8,6 +8,7 @@ import Photos
 
 struct RootView: View {
     @Environment(PhotoLibraryService.self) private var photoService
+    @Environment(AppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
     
     var body: some View {
@@ -33,6 +34,11 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 photoService.checkAuthorization()
+            }
+        }
+        .onChange(of: photoService.authorizationStatus) { oldStatus, newStatus in
+            if (oldStatus == .notDetermined || oldStatus == .denied) && (newStatus == .authorized || newStatus == .limited) {
+                appModel.onPhotoAccessGranted()
             }
         }
     }

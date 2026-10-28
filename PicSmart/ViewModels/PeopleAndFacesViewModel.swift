@@ -102,6 +102,13 @@ final class PeopleAndFacesViewModel {
             return
         }
         
+        guard !isScanning else {
+            while isScanning {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            return
+        }
+        
         isScanning = true
         hasCompletedScan = false
         progress = AnalysisProgress(completed: 0, total: 1, stage: "Checking library…")
@@ -114,7 +121,14 @@ final class PeopleAndFacesViewModel {
             }
         }
         
-        if !Task.isCancelled {
+        if Task.isCancelled {
+            if !result.personClusters.isEmpty {
+                self.personClusters = result.personClusters
+                self.items = result.allPhotoItems
+            }
+            self.hasCompletedScan = false
+            self.onScanCompleted?()
+        } else {
             self.personClusters = result.personClusters
             self.items = result.allPhotoItems
             self.hasCompletedScan = true
@@ -179,14 +193,14 @@ final class PeopleAndFacesViewModel {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
-        hasCompletedScan = true
+        hasCompletedScan = false
         progress = nil
         statusMessage = nil
     }
     
     // MARK: - Cold Launch Hydration
     
-    func hydrate(from dtos: [PersistedPersonDTO]) {
+    func hydrate(from dtos: [PersistedPersonDTO], isFullyEvaluated: Bool = false) {
         guard personClusters.isEmpty && !hasCompletedScan else { return }
         let allIds = dtos.flatMap { $0.memberAssetIds + [$0.avatarAssetId] }
         guard !allIds.isEmpty else { return }
@@ -232,7 +246,7 @@ final class PeopleAndFacesViewModel {
                     fileSize: asset.primaryResourceFileSize ?? 3_500_000
                 )
             }
-            self.hasCompletedScan = true
+            self.hasCompletedScan = isFullyEvaluated
             self.onScanCompleted?()
         }
     }

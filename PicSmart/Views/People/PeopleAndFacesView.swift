@@ -54,8 +54,7 @@ struct PeopleAndFacesView: View {
                 ScanningProgressView(
                     category: .people,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.statusMessage ?? "Clustering people & faces…",
-                    onCancel: { viewModel.cancel() }
+                    statusMessage: viewModel.statusMessage ?? "Clustering people & faces…"
                 )
             } else if viewModel.personClusters.isEmpty {
                 ContentUnavailableView(

@@ -121,62 +121,105 @@ actor PeopleAnalysisEngine {
         var allBiometricFaces: [BiometricFaceItem] = []
         var newEmbeddingsToPersist: [FaceEmbeddingDTO] = []
         
-        var completedCount = 0
+        // 1. Separate already-cached assets from missing assets
+        var missingAssets: [PHAsset] = []
+        for asset in allAssets {
+            if let cached = cachedByAsset[asset.localIdentifier] {
+                let validFaces = cached.filter { $0.faceIndex != -1 }
+                if !validFaces.isEmpty {
+                    let biometricFaces = validFaces.map { dto in
+                        BiometricFaceItem(
+                            id: dto.id,
+                            asset: asset,
+                            boundingBox: dto.boundingBox,
+                            captureQuality: dto.captureQuality,
+                            embedding: dto.embedding
+                        )
+                    }
+                    let size = asset.primaryResourceFileSize ?? 3_500_000
+                    let item = PersonPhotoItem(
+                        asset: asset,
+                        faceCount: validFaces.count,
+                        hasBlinkedEyes: false,
+                        averageQuality: 1.0,
+                        fileSize: size
+                    )
+                    photoItems.append(item)
+                    allBiometricFaces.append(contentsOf: biometricFaces)
+                }
+            } else {
+                missingAssets.append(asset)
+            }
+        }
+        
+        var completedCount = totalCount - missingAssets.count
         var lastProgressTime = CACurrentMediaTime()
         progressHandler?(AnalysisProgress(
-            completed: 0,
+            completed: completedCount,
             total: totalCount,
-            stage: "Detecting & analyzing faces (0/\(totalCount))…"
+            stage: "Detecting & analyzing faces (\(completedCount)/\(totalCount))…"
         ))
         
         let workerCount = 3
         var nextIndex = 0
         
-        await withTaskGroup(of: AssetFaceResult.self) { group in
-            while nextIndex < min(workerCount, allAssets.count) {
-                let asset = allAssets[nextIndex]
-                nextIndex += 1
-                let cached = cachedByAsset[asset.localIdentifier]
-                group.addTask {
-                    await self.analyzeAsset(asset: asset, cachedDTOs: cached)
-                }
-            }
-            
-            while let result = await group.next() {
-                if Task.isCancelled { break }
-                completedCount += 1
-                
-                if let item = result.item, item.faceCount > 0 {
-                    photoItems.append(item)
-                    allBiometricFaces.append(contentsOf: result.faces)
-                    newEmbeddingsToPersist.append(contentsOf: result.newEmbeddings)
-                }
-                
-                let now = CACurrentMediaTime()
-                if now - lastProgressTime >= 0.15 || completedCount == totalCount {
-                    lastProgressTime = now
-                    progressHandler?(AnalysisProgress(
-                        completed: completedCount,
-                        total: totalCount,
-                        stage: "Detecting & embedding faces (\(completedCount)/\(totalCount))…"
-                    ))
-                }
-                
-                await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .people)
-                if !Task.isCancelled && nextIndex < allAssets.count {
-                    let nextAsset = allAssets[nextIndex]
+        if !missingAssets.isEmpty {
+            await withTaskGroup(of: AssetFaceResult.self) { group in
+                while nextIndex < min(workerCount, missingAssets.count) {
+                    let asset = missingAssets[nextIndex]
                     nextIndex += 1
-                    let cached = cachedByAsset[nextAsset.localIdentifier]
                     group.addTask {
-                        await self.analyzeAsset(asset: nextAsset, cachedDTOs: cached)
+                        await self.analyzeAsset(asset: asset, cachedDTOs: nil)
+                    }
+                }
+                
+                while let result = await group.next() {
+                    if Task.isCancelled { break }
+                    completedCount += 1
+                    
+                    if let item = result.item, item.faceCount > 0 {
+                        photoItems.append(item)
+                        allBiometricFaces.append(contentsOf: result.faces)
+                    }
+                    if !result.newEmbeddings.isEmpty {
+                        newEmbeddingsToPersist.append(contentsOf: result.newEmbeddings)
+                    }
+                    
+                    // Periodic Flush every 25 embeddings to guarantee in-flight persistence
+                    if newEmbeddingsToPersist.count >= 25 {
+                        let chunk = newEmbeddingsToPersist
+                        newEmbeddingsToPersist.removeAll(keepingCapacity: true)
+                        Task.detached(priority: .utility) {
+                            try? await PersistentClusterStore.shared.saveFaceEmbeddings(chunk)
+                        }
+                    }
+                    
+                    let now = CACurrentMediaTime()
+                    if now - lastProgressTime >= 0.15 || completedCount == totalCount {
+                        lastProgressTime = now
+                        progressHandler?(AnalysisProgress(
+                            completed: completedCount,
+                            total: totalCount,
+                            stage: "Detecting & embedding faces (\(completedCount)/\(totalCount))…"
+                        ))
+                    }
+                    
+                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .people)
+                    if !Task.isCancelled && nextIndex < missingAssets.count {
+                        let nextAsset = missingAssets[nextIndex]
+                        nextIndex += 1
+                        group.addTask {
+                            await self.analyzeAsset(asset: nextAsset, cachedDTOs: nil)
+                        }
                     }
                 }
             }
         }
         
-        // Persist newly computed embeddings to SwiftData asynchronously
+        // Persist remaining embeddings (< 25) to SwiftData
         if !newEmbeddingsToPersist.isEmpty {
             let toSave = newEmbeddingsToPersist
+            newEmbeddingsToPersist.removeAll()
             Task.detached(priority: .utility) {
                 try? await PersistentClusterStore.shared.saveFaceEmbeddings(toSave)
             }
@@ -263,7 +306,11 @@ actor PeopleAnalysisEngine {
     private func analyzeAsset(asset: PHAsset, cachedDTOs: [FaceEmbeddingDTO]?) async -> AssetFaceResult {
         // If already cached in SwiftData, reconstruct in microseconds without re-running Vision / CoreML
         if let cachedDTOs, !cachedDTOs.isEmpty {
-            let biometricFaces = cachedDTOs.map { dto in
+            let validFaces = cachedDTOs.filter { $0.faceIndex != -1 }
+            if validFaces.isEmpty {
+                return AssetFaceResult(item: nil, faces: [], newEmbeddings: [])
+            }
+            let biometricFaces = validFaces.map { dto in
                 BiometricFaceItem(
                     id: dto.id,
                     asset: asset,
@@ -275,7 +322,7 @@ actor PeopleAnalysisEngine {
             let size = asset.primaryResourceFileSize ?? 3_500_000
             let item = PersonPhotoItem(
                 asset: asset,
-                faceCount: cachedDTOs.count,
+                faceCount: validFaces.count,
                 hasBlinkedEyes: false,
                 averageQuality: 1.0,
                 fileSize: size
@@ -367,6 +414,17 @@ actor PeopleAnalysisEngine {
                         boundingBox: face.boundingBox,
                         captureQuality: quality,
                         embedding: embedding
+                    ))
+                }
+                
+                if newDTOs.isEmpty {
+                    newDTOs.append(FaceEmbeddingDTO(
+                        id: "\(asset.localIdentifier)_noface",
+                        assetIdentifier: asset.localIdentifier,
+                        faceIndex: -1,
+                        boundingBox: .zero,
+                        captureQuality: 0.0,
+                        embedding: []
                     ))
                 }
                 

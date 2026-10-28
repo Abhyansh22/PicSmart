@@ -129,8 +129,13 @@ struct HomeView: View {
             OnboardingView()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                appModel.runDeltaSync()
+            switch newPhase {
+            case .background:
+                appModel.handleDidEnterBackground()
+            case .active:
+                appModel.handleDidBecomeActive()
+            default:
+                break
             }
         }
         .onChange(of: hasCompletedOnboarding) { _, newValue in
@@ -139,13 +144,13 @@ struct HomeView: View {
             }
         }
         .onAppear {
-            if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {
-                appModel.onPhotoAccessGranted()
+            AnalysisPipelineCoordinator.shared.resumeFromBackground()
+            if appModel.counts[.screenshots] == nil || appModel.counts[.screenshots] == 0 {
+                appModel.refreshCounts()
             }
             if !hasCompletedOnboarding {
                 showingOnboarding = true
             }
-            appModel.refreshCounts()
             handleCommandLineArguments()
         }
         .onOpenURL { url in

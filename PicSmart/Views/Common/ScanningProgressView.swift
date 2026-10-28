@@ -86,19 +86,11 @@ struct ScanningProgressView: View {
             
             Spacer()
             
-            // Cancel Button
-            if let onCancel {
-                Button(action: onCancel) {
-                    Text("Cancel Analysis")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
-                        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                }
-                .buttonStyle(PlainButtonStyle())
+            // On-device privacy note
+            Text("PicSmart analyzes media securely on-device")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
                 .padding(.bottom, 24)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemGroupedBackground))

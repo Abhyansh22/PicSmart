@@ -65,6 +65,7 @@ final class TestingResetManager {
 
 extension PersistentClusterStore {
     func resetAllData() {
+        try? modelContext.delete(model: CachedBlurRecord.self)
         try? modelContext.delete(model: CachedVisualSignature.self)
         try? modelContext.delete(model: PersistentAssetCluster.self)
         try? modelContext.delete(model: CleanupSessionRecord.self)

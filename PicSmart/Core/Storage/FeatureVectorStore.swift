@@ -65,10 +65,12 @@ actor FeatureVectorStore {
     static let shared: FeatureVectorStore = {
         do {
             let schema = Schema([
+                CachedBlurRecord.self,
                 CachedVisualSignature.self,
                 PersistentAssetCluster.self,
                 CleanupSessionRecord.self,
-                PersistentPersonCluster.self
+                PersistentPersonCluster.self,
+                CachedFaceEmbedding.self
             ])
             let config = ModelConfiguration("PicSmartVisualStore", isStoredInMemoryOnly: false)
             let container = try ModelContainer(for: schema, configurations: [config])

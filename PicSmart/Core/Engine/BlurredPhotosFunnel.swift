@@ -28,17 +28,17 @@ actor BlurredPhotosFunnel {
     
     /// Evaluates a single newly added asset for incremental delta sync
     func evaluateSingleAsset(_ asset: PHAsset) async -> BlurredPhotoItem? {
-        guard let (_, _, dto, item) = await evaluateAssetSharpness(asset) else { return nil }
-        if let dto {
-            await FeatureVectorStore.shared.saveSignatures([dto])
+        guard let (_, _, recordDTO, item) = await evaluateAssetSharpness(asset) else { return nil }
+        if let recordDTO {
+            try? await PersistentClusterStore.shared.saveBlurRecords([recordDTO])
         }
         return item
     }
     
     /// Rapidly hydrates previously verified blurred photos from SwiftData cache without running any Vision models
     func loadCachedBlurredItems() async -> [BlurredPhotoItem] {
-        let cachedMap = await FeatureVectorStore.shared.loadAllSignatures()
-        let blurredEntries = cachedMap.filter { $0.value.sharpnessScore >= 40.0 && $0.value.sharpnessScore <= 100.0 }
+        let cachedMap = (try? await PersistentClusterStore.shared.loadAllBlurRecords()) ?? [:]
+        let blurredEntries = cachedMap.filter { $0.value.blurPercentage >= 40 }
         guard !blurredEntries.isEmpty else { return [] }
         
         let ids = Array(blurredEntries.keys)
@@ -51,12 +51,11 @@ actor BlurredPhotosFunnel {
         var items: [BlurredPhotoItem] = []
         for (id, dto) in blurredEntries {
             guard let asset = assetMap[id] else { continue }
-            let pct = Int(dto.sharpnessScore)
             let size = asset.primaryResourceFileSize ?? 3_500_000
             items.append(BlurredPhotoItem(
                 asset: asset,
-                sharpnessScore: dto.sharpnessScore,
-                blurPercentage: pct,
+                sharpnessScore: Double(dto.blurPercentage),
+                blurPercentage: dto.blurPercentage,
                 fileSize: size
             ))
         }
@@ -79,24 +78,20 @@ actor BlurredPhotosFunnel {
             allAssets.append(asset)
         }
         
-        // 1. Check cached signatures in SwiftData
-        let cachedMap = await FeatureVectorStore.shared.loadAllSignatures()
+        // 1. Check isolated cached blur records in SwiftData
+        let cachedMap = (try? await PersistentClusterStore.shared.loadAllBlurRecords()) ?? [:]
         
         var evaluatedItems: [BlurredPhotoItem] = []
         var missingAssets: [PHAsset] = []
         
         for asset in allAssets {
-            // New calibrated blur score is 0.0 (sharp) or 40.0...99.0 (blurred percentage).
-            // Any score > 100.0 is an old legacy Laplacian scalar and will be re-analyzed.
-            if let cached = cachedMap[asset.localIdentifier],
-               cached.sharpnessScore >= 0.0 && cached.sharpnessScore <= 100.0 {
-                if cached.sharpnessScore >= 40.0 {
-                    let pct = Int(cached.sharpnessScore)
+            if let cached = cachedMap[asset.localIdentifier] {
+                if cached.blurPercentage >= 40 {
                     let size = asset.primaryResourceFileSize ?? 3_500_000
                     evaluatedItems.append(BlurredPhotoItem(
                         asset: asset,
-                        sharpnessScore: cached.sharpnessScore,
-                        blurPercentage: pct,
+                        sharpnessScore: Double(cached.blurPercentage),
+                        blurPercentage: cached.blurPercentage,
                         fileSize: size
                     ))
                 }
@@ -116,9 +111,9 @@ actor BlurredPhotosFunnel {
         if !missingAssets.isEmpty {
             let workerCount = 3
             var nextIndex = 0
-            var newSignatures: [VisualSignatureDTO] = []
+            var pendingFlush: [BlurRecordDTO] = []
             
-            await withTaskGroup(of: (PHAsset, Double, VisualSignatureDTO?, BlurredPhotoItem?)?.self) { group in
+            await withTaskGroup(of: (PHAsset, Double, BlurRecordDTO?, BlurredPhotoItem?)?.self) { group in
                 while nextIndex < min(workerCount, missingAssets.count) {
                     let asset = missingAssets[nextIndex]
                     nextIndex += 1
@@ -131,13 +126,20 @@ actor BlurredPhotosFunnel {
                     if Task.isCancelled { break }
                     completedCount += 1
                     
-                    if let (_, _, dto, item) = result {
-                        if let dto {
-                            newSignatures.append(dto)
+                    if let (_, _, recordDTO, item) = result {
+                        if let recordDTO {
+                            pendingFlush.append(recordDTO)
                         }
                         if let item {
                             evaluatedItems.append(item)
                         }
+                    }
+                    
+                    // Periodic Flush every 25 completed items to guarantee in-flight persistence
+                    if pendingFlush.count >= 25 {
+                        let chunk = pendingFlush
+                        pendingFlush.removeAll(keepingCapacity: true)
+                        try? await PersistentClusterStore.shared.saveBlurRecords(chunk)
                     }
                     
                     let now = CACurrentMediaTime()
@@ -161,8 +163,9 @@ actor BlurredPhotosFunnel {
                 }
             }
             
-            if !newSignatures.isEmpty {
-                await FeatureVectorStore.shared.saveSignatures(newSignatures)
+            // Flush remaining items (< 25) upon normal completion or cancellation
+            if !pendingFlush.isEmpty {
+                try? await PersistentClusterStore.shared.saveBlurRecords(pendingFlush)
             }
         }
         
@@ -171,7 +174,7 @@ actor BlurredPhotosFunnel {
         return evaluatedItems
     }
     
-    private func evaluateAssetSharpness(_ asset: PHAsset) async -> (PHAsset, Double, VisualSignatureDTO?, BlurredPhotoItem?)? {
+    private func evaluateAssetSharpness(_ asset: PHAsset) async -> (PHAsset, Double, BlurRecordDTO?, BlurredPhotoItem?)? {
         // Use high-fidelity 1024px thumbnail to preserve optical edge frequencies (eyelashes, hair, texture).
         guard let cgImage = await ThumbnailService.shared.requestAnalysisThumbnail(
             for: asset,
@@ -180,7 +183,7 @@ actor BlurredPhotosFunnel {
             return nil
         }
         
-        return autoreleasepool { () -> (PHAsset, Double, VisualSignatureDTO?, BlurredPhotoItem?)? in
+        return autoreleasepool { () -> (PHAsset, Double, BlurRecordDTO?, BlurredPhotoItem?)? in
             let aestheticsRequest = VNCalculateImageAestheticsScoresRequest()
             let faceRequest = VNDetectFaceLandmarksRequest()
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
@@ -243,19 +246,13 @@ actor BlurredPhotosFunnel {
             }
             
             let size = asset.primaryResourceFileSize ?? 3_500_000
-            let hashData = DifferenceHash.compute(from: cgImage)
-            var dto: VisualSignatureDTO? = nil
-            if let hashData {
-                dto = VisualSignatureDTO(
-                    localIdentifier: asset.localIdentifier,
-                    gradientHash: hashData.hash,
-                    averageLuminance: hashData.luma,
-                    aspectBand: asset.aspectRatioBand,
-                    creationWeekBucket: asset.creationWeekBucket,
-                    sharpnessScore: isBlurred ? Double(blurPercentage) : 0.0,
-                    featureData: nil
-                )
-            }
+            let recordDTO = BlurRecordDTO(
+                localIdentifier: asset.localIdentifier,
+                blurPercentage: isBlurred ? blurPercentage : 0,
+                isSevere: blurPercentage >= 75,
+                evaluatedAt: Date(),
+                modificationTime: asset.modificationDate?.timeIntervalSince1970 ?? 0
+            )
             
             let item: BlurredPhotoItem? = isBlurred ? BlurredPhotoItem(
                 asset: asset,
@@ -264,27 +261,21 @@ actor BlurredPhotosFunnel {
                 fileSize: size
             ) : nil
             
-            return (asset, isBlurred ? Double(blurPercentage) : 0.0, dto, item)
+            return (asset, isBlurred ? Double(blurPercentage) : 0.0, recordDTO, item)
         }
     }
     
     private func makeCleanResult(
         asset: PHAsset,
         cgImage: CGImage
-    ) -> (PHAsset, Double, VisualSignatureDTO?, BlurredPhotoItem?) {
-        let hashData = DifferenceHash.compute(from: cgImage)
-        var dto: VisualSignatureDTO? = nil
-        if let hashData {
-            dto = VisualSignatureDTO(
-                localIdentifier: asset.localIdentifier,
-                gradientHash: hashData.hash,
-                averageLuminance: hashData.luma,
-                aspectBand: asset.aspectRatioBand,
-                creationWeekBucket: asset.creationWeekBucket,
-                sharpnessScore: 0.0, // 0.0 indicates verified sharp photo
-                featureData: nil
-            )
-        }
-        return (asset, 0.0, dto, nil)
+    ) -> (PHAsset, Double, BlurRecordDTO?, BlurredPhotoItem?) {
+        let recordDTO = BlurRecordDTO(
+            localIdentifier: asset.localIdentifier,
+            blurPercentage: 0,
+            isSevere: false,
+            evaluatedAt: Date(),
+            modificationTime: asset.modificationDate?.timeIntervalSince1970 ?? 0
+        )
+        return (asset, 0.0, recordDTO, nil)
     }
 }

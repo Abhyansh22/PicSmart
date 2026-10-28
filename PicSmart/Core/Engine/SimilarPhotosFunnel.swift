@@ -122,6 +122,13 @@ struct SimilarPhotosFunnel: Sendable {
                     }
                     completedCount += 1
                     
+                    // Periodic Flush every 25 completed items to guarantee in-flight persistence
+                    if toSave.count >= 25 {
+                        let chunk = toSave
+                        toSave.removeAll(keepingCapacity: true)
+                        await FeatureVectorStore.shared.saveSignatures(chunk)
+                    }
+                    
                     // Area 4: Time-throttled progress updates (every 150ms or on completion)
                     let now = CACurrentMediaTime()
                     if now - lastProgressTime >= 0.15 || completedCount == totalCount {
@@ -146,8 +153,10 @@ struct SimilarPhotosFunnel: Sendable {
             }
         }
         
+        // Flush remaining signatures (< 25) upon loop completion
         if !toSave.isEmpty {
             await FeatureVectorStore.shared.saveSignatures(toSave)
+            toSave.removeAll()
         }
         
         guard !Task.isCancelled else { return [] }

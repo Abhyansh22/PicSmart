@@ -37,10 +37,7 @@ struct LargeVideosView: View {
                 ScanningProgressView(
                     category: .largeVideos,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.progressMessage ?? "Analyzing videos…",
-                    onCancel: {
-                        viewModel.cancel()
-                    }
+                    statusMessage: viewModel.progressMessage ?? "Analyzing videos…"
                 )
             } else if viewModel.sortedLargeVideoAssets.isEmpty {
                 ContentUnavailableView(

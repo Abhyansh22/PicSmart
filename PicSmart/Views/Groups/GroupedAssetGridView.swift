@@ -26,10 +26,7 @@ struct GroupedAssetGridView: View {
                 ScanningProgressView(
                     category: category,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.statusMessage ?? "Preparing analysis…",
-                    onCancel: {
-                        viewModel.cancel()
-                    }
+                    statusMessage: viewModel.statusMessage ?? "Preparing analysis…"
                 )
             } else if viewModel.groups.isEmpty {
                 ContentUnavailableView(

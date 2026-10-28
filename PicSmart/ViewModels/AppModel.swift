@@ -53,6 +53,12 @@ final class AppModel {
         peopleAndFacesViewModel.onScanCompleted = { [weak self] in
             self?.refreshCounts()
         }
+        screenshotsViewModel.onScanCompleted = { [weak self] in
+            self?.refreshCounts()
+        }
+        videosViewModel.onScanCompleted = { [weak self] in
+            self?.refreshCounts()
+        }
         
         // Listen to system PhotoKit changes across the entire app
         PhotoLibraryService.shared.libraryChangePublisher
@@ -86,11 +92,20 @@ final class AppModel {
             if let dupVid, !dupVid.isEmpty {
                 self.duplicateVideosViewModel.hydrate(from: dupVid)
             }
+            let totalImages = PhotoLibraryService.shared.fetchTotalImageCount()
+            let allBlurRecords = (try? await PersistentClusterStore.shared.loadAllBlurRecords()) ?? [:]
+            let isBlurComplete = totalImages > 0 && allBlurRecords.count >= totalImages
+            
             if let persons, !persons.isEmpty {
-                self.peopleAndFacesViewModel.hydrate(from: persons)
+                self.peopleAndFacesViewModel.hydrate(from: persons, isFullyEvaluated: false)
+                self.counts[.people] = self.peopleAndFacesViewModel.totalCount
             }
             if !blurred.isEmpty {
-                self.blurredPhotosViewModel.hydrate(from: blurred)
+                self.blurredPhotosViewModel.hydrate(from: blurred, isFullyEvaluated: isBlurComplete)
+                self.counts[.blurredPhotos] = self.blurredPhotosViewModel.totalCount
+            } else if isBlurComplete {
+                self.blurredPhotosViewModel.hasCompletedScan = true
+                self.counts[.blurredPhotos] = 0
             }
             if let largeVideoMeta {
                 self.largeVideosViewModel.hydrateLargeVideos(
@@ -105,7 +120,45 @@ final class AppModel {
         }
     }
     
+    // MARK: - Background Lifecycle Management
+    
+    func handleDidEnterBackground() {
+        var bgTaskId = UIBackgroundTaskIdentifier.invalid
+        bgTaskId = UIApplication.shared.beginBackgroundTask(withName: "PicSmart.LifecycleFlush") {
+            // Watchdog deadline reached: force suspend and end background task immediately
+            AnalysisPipelineCoordinator.shared.suspendForBackground()
+            if bgTaskId != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTaskId)
+                bgTaskId = .invalid
+            }
+        }
+        
+        Task {
+            // Suspend background pipeline to pause thread/ANE consumption
+            AnalysisPipelineCoordinator.shared.suspendForBackground()
+            
+            // Allow a short 500ms window for any pending batch to complete disk flush
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            
+            if bgTaskId != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTaskId)
+                bgTaskId = .invalid
+            }
+        }
+    }
+    
+    func handleDidBecomeActive() {
+        AnalysisPipelineCoordinator.shared.resumeFromBackground()
+        runDeltaSync()
+    }
+    
     func onPhotoAccessGranted() {
+        AnalysisPipelineCoordinator.shared.resumeFromBackground()
+        
+        // Immediately populate instantaneous Tier 0 counts synchronously
+        counts[.screenshots] = PhotoLibraryService.shared.fetchScreenshotsCount()
+        counts[.videos] = PhotoLibraryService.shared.fetchVideosCount()
+        
         if duplicatePhotosViewModel.groups.isEmpty {
             duplicatePhotosViewModel.hasCompletedScan = false
         }
@@ -224,21 +277,21 @@ final class AppModel {
     func badgeCount(for category: GalleryCategory) -> Int? {
         switch category {
         case .screenshots:
-            return counts[.screenshots]
+            return screenshotsViewModel.hasLoaded ? screenshotsViewModel.totalCount : counts[.screenshots]
         case .videos:
-            return counts[.videos]
+            return videosViewModel.hasLoaded ? videosViewModel.totalCount : counts[.videos]
         case .blurredPhotos:
-            return blurredPhotosViewModel.hasCompletedScan ? blurredPhotosViewModel.totalCount : counts[.blurredPhotos]
+            return blurredPhotosViewModel.hasCompletedScan ? blurredPhotosViewModel.totalCount : (blurredPhotosViewModel.items.isEmpty ? counts[.blurredPhotos] : blurredPhotosViewModel.totalCount)
         case .people:
             return peopleAndFacesViewModel.hasCompletedScan ? peopleAndFacesViewModel.totalCount : counts[.people]
         case .largeVideos:
             return largeVideosViewModel.hasLoaded ? largeVideosViewModel.totalCount : counts[.largeVideos]
         case .duplicatePhotos:
-            return duplicatePhotosViewModel.hasCompletedScan ? duplicatePhotosViewModel.totalRedundantCount : nil
+            return duplicatePhotosViewModel.hasCompletedScan ? duplicatePhotosViewModel.totalRedundantCount : counts[.duplicatePhotos]
         case .duplicateVideos:
-            return duplicateVideosViewModel.hasCompletedScan ? duplicateVideosViewModel.totalRedundantCount : nil
+            return duplicateVideosViewModel.hasCompletedScan ? duplicateVideosViewModel.totalRedundantCount : counts[.duplicateVideos]
         case .similarPhotos:
-            return similarPhotosViewModel.hasCompletedScan ? similarPhotosViewModel.totalRedundantCount : nil
+            return similarPhotosViewModel.hasCompletedScan ? similarPhotosViewModel.totalRedundantCount : counts[.similarPhotos]
         }
     }
     
@@ -262,22 +315,19 @@ final class AppModel {
     }
     
     func refreshCounts() {
+        // Fast Tier 0 counts fetched synchronously on MainActor (< 1ms)
+        let screenshots = PhotoLibraryService.shared.fetchScreenshotsCount()
+        let videos = PhotoLibraryService.shared.fetchVideosCount()
+        counts[.screenshots] = screenshots
+        counts[.videos] = videos
+        
         countTask?.cancel()
         countTask = Task {
             isLoadingCounts = true
             
-            // Tier 0 SQLite database queries: instant (< 1ms)
-            async let scCount = PhotoLibraryService.shared.fetchScreenshotsCount()
-            async let vCount = PhotoLibraryService.shared.fetchVideosCount()
-            
-            let screenshots = await scCount
-            let videos = await vCount
-            
             let cachedLv = await MediaAnalyzerEngine.shared.cachedLargeVideoCount(minThresholdBytes: 0)
             
             if !Task.isCancelled {
-                counts[.screenshots] = screenshots
-                counts[.videos] = videos
                 if let cachedLv {
                     counts[.largeVideos] = cachedLv
                 } else if largeVideosViewModel.hasLoaded {

@@ -48,7 +48,9 @@ final class MediaCollectionViewModel {
     }
     
     func startLoadIfNeeded() {
-        if !isLoading && (!hasLoaded || totalCount == 0) {
+        let authStatus = PhotoLibraryService.shared.authorizationStatus
+        guard authStatus == .authorized || authStatus == .limited else { return }
+        if !isLoading && !hasLoaded {
             load()
         }
     }
@@ -198,7 +200,7 @@ final class MediaCollectionViewModel {
             }
             
             self.isLoading = false
-            self.hasLoaded = true
+            self.hasLoaded = !Task.isCancelled
             self.progressMessage = nil
             self.progress = nil
             self.onScanCompleted?()
@@ -265,7 +267,7 @@ final class MediaCollectionViewModel {
         loadTask?.cancel()
         loadTask = nil
         isLoading = false
-        hasLoaded = true
+        hasLoaded = false
         progressMessage = nil
         progress = nil
     }

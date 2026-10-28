@@ -25,16 +25,26 @@ struct CategoryCardView: View {
                 
                 Spacer()
                 
-                if let count = count {
+                if isScanning {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        if let count = count, count > 0 {
+                            Text("\(count)")
+                                .font(.callout.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                } else if let count = count {
                     Text("\(count)")
                         .font(.callout.weight(.bold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 4)
                         .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                } else if isScanning {
-                    ProgressView()
-                        .scaleEffect(0.7)
                 }
             }
             
@@ -52,7 +62,7 @@ struct CategoryCardView: View {
             Spacer(minLength: 0)
             
             HStack(spacing: 4) {
-                Text(count != nil ? "\(count!) items" : "Open")
+                Text(isScanning ? "Scanning…" : (count != nil ? "\(count!) items" : "Open"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(category.themeColor)
                 

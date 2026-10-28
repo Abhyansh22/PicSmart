@@ -73,6 +73,11 @@ final class PhotoLibraryService: NSObject {
         return PHAsset.fetchAssets(with: .video, options: options)
     }
     
+    nonisolated func fetchTotalImageCount() -> Int {
+        let options = PHFetchOptions()
+        return PHAsset.fetchAssets(with: .image, options: options).count
+    }
+    
     nonisolated func fetchScreenshotsCount() -> Int {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(
