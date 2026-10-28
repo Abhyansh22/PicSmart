@@ -12,6 +12,7 @@ struct GroupedAssetGridView: View {
     @State private var showingDeleteConfirmation = false
     @State private var isCleaning = false
     @State private var isSelectionMode = false
+    @State private var comparingGroup: AssetGroup?
     
     private var viewModel: GroupedScanViewModel {
         appModel.groupedViewModel(for: category)
@@ -58,19 +59,7 @@ struct GroupedAssetGridView: View {
                         LazyVStack(spacing: 12) {
                             ForEach(viewModel.groups) { group in
                                 GroupCardView(
-                                    group: Binding(
-                                        get: {
-                                            if let idx = viewModel.groups.firstIndex(where: { $0.id == group.id }) {
-                                                return viewModel.groups[idx]
-                                            }
-                                            return group
-                                        },
-                                        set: { newGroup in
-                                            if let idx = viewModel.groups.firstIndex(where: { $0.id == group.id }) {
-                                                viewModel.groups[idx] = newGroup
-                                            }
-                                        }
-                                    ),
+                                    group: group,
                                     isSelectionMode: isSelectionMode,
                                     onKeeperChanged: { newKeeper in
                                         viewModel.setKeeper(assetId: newKeeper, in: group.id)
@@ -89,6 +78,9 @@ struct GroupedAssetGridView: View {
                                         Task {
                                             try? await appModel.deleteAssets(localIdentifiers: [assetId], categoryTitle: category.title)
                                         }
+                                    },
+                                    onCompare: {
+                                        comparingGroup = group
                                     }
                                 )
                             }
@@ -96,6 +88,29 @@ struct GroupedAssetGridView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 90) // space for bottom clean bar
                     }
+                }
+                .sheet(item: $comparingGroup) { group in
+                    CompareView(
+                        group: Binding(
+                            get: { viewModel.groups.first(where: { $0.id == group.id }) ?? group },
+                            set: { newGroup in
+                                if let idx = viewModel.groups.firstIndex(where: { $0.id == group.id }) {
+                                    viewModel.groups[idx] = newGroup
+                                }
+                            }
+                        ),
+                        onKeeperChanged: { newKeeper in
+                            viewModel.setKeeper(assetId: newKeeper, in: group.id)
+                        },
+                        onToggleMarked: { assetId in
+                            viewModel.toggleMarkedForDeletion(assetId: assetId, in: group.id)
+                        },
+                        onDeleteSingleAsset: { assetId in
+                            Task {
+                                try? await appModel.deleteAssets(localIdentifiers: [assetId], categoryTitle: category.title)
+                            }
+                        }
+                    )
                 }
             }
             

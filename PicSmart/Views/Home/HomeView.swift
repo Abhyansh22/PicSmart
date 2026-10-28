@@ -13,7 +13,6 @@ struct HomeView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
     @State private var navigationPath = NavigationPath()
     @State private var showingSettings = false
-    @State private var showingOnboarding = false
     
     private let columns = [
         GridItem(.flexible(), spacing: 14),
@@ -46,14 +45,7 @@ struct HomeView: View {
                         
                         LazyVGrid(columns: columns, spacing: 14) {
                             ForEach(GalleryCategory.allCases.filter { $0.section == .cleanUp }) { category in
-                                NavigationLink(value: category) {
-                                    CategoryCardView(
-                                        category: category,
-                                        status: appModel.status(for: category)
-                                    )
-                                    .contentShape(RoundedRectangle(cornerRadius: 18))
-                                }
-                                .buttonStyle(PlainButtonStyle())
+                                HomeCategoryCard(category: category)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -71,14 +63,7 @@ struct HomeView: View {
                         
                         LazyVGrid(columns: columns, spacing: 14) {
                             ForEach(GalleryCategory.allCases.filter { $0.section == .organize }) { category in
-                                NavigationLink(value: category) {
-                                    CategoryCardView(
-                                        category: category,
-                                        status: appModel.status(for: category)
-                                    )
-                                    .contentShape(RoundedRectangle(cornerRadius: 18))
-                                }
-                                .buttonStyle(PlainButtonStyle())
+                                HomeCategoryCard(category: category)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -123,9 +108,6 @@ struct HomeView: View {
         }) {
             SettingsView()
         }
-        .sheet(isPresented: $showingOnboarding) {
-            OnboardingView()
-        }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .background:
@@ -136,18 +118,10 @@ struct HomeView: View {
                 break
             }
         }
-        .onChange(of: hasCompletedOnboarding) { _, newValue in
-            if !newValue {
-                showingOnboarding = true
-            }
-        }
         .onAppear {
             AnalysisPipelineCoordinator.shared.resumeFromBackground()
             if appModel.counts[.screenshots] == nil || appModel.counts[.screenshots] == 0 {
                 appModel.refreshCounts()
-            }
-            if !hasCompletedOnboarding {
-                showingOnboarding = true
             }
             handleCommandLineArguments()
         }
@@ -242,5 +216,23 @@ struct HomeView: View {
         if let matched = GalleryCategory.allCases.first(where: { $0.rawValue.lowercased() == catArg }) {
             navigationPath = NavigationPath([matched])
         }
+    }
+}
+
+// MARK: - Isolated Category Card for 120 FPS Scrolling Performance
+
+private struct HomeCategoryCard: View {
+    let category: GalleryCategory
+    @Environment(AppModel.self) private var appModel
+    
+    var body: some View {
+        NavigationLink(value: category) {
+            CategoryCardView(
+                category: category,
+                status: appModel.status(for: category)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }

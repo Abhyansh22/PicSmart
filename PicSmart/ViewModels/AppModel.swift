@@ -68,9 +68,12 @@ final class AppModel {
             }
             .store(in: &cancellables)
             
-        hydratePersistedClusters()
-        refreshCounts()
-        AnalysisPipelineCoordinator.shared.startProactiveBackgroundScan(appModel: self)
+        let auth = PhotoLibraryService.shared.authorizationStatus
+        if auth == .authorized || auth == .limited {
+            hydratePersistedClusters()
+            refreshCounts()
+            AnalysisPipelineCoordinator.shared.startProactiveBackgroundScan(appModel: self)
+        }
     }
     
     func hydratePersistedClusters() {

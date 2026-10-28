@@ -4,47 +4,74 @@
 //
 
 import SwiftUI
+import Photos
 
 struct OnboardingView: View {
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+    @Environment(AppModel.self) private var appModel
+    @Environment(PhotoLibraryService.self) private var photoService
+    
     @State private var currentStep = 0
+    @State private var isShowingPermissionPrompt = false
+    
+    var onFinished: (() -> Void)?
     
     private let slides = [
         OnboardingSlide(
-            icon: "sparkles",
+            icon: "square.stack.3d.down.right.fill",
             iconColor: Color.blue,
-            title: "Smart Gallery Cleaner",
-            description: "Automatically identify blurry photos, visual look-alikes, exact duplicate files, and heavy videos eating up your device storage.",
-            badge: "100% On-Device Neural AI"
+            title: "Reclaim Gigabytes",
+            description: "Automatically surface exact duplicates, similar burst photos, and heavy video files eating up your device storage.",
+            badge: "Intelligent Deduplication"
         ),
         OnboardingSlide(
-            icon: "checkmark.seal.fill",
+            icon: "camera.metering.matrix",
             iconColor: Color.orange,
-            title: "Best-Shot & Keepers",
-            description: "PicSmart algorithmically detects facial sharpness and Laplacian edge clarity to tag the best photo in every burst. Tap any item to swap keepers or compare side-by-side.",
-            badge: "Intelligent Selection"
+            title: "Find Blurry Shots",
+            description: "Advanced on-device neural edge analysis tags accidental out-of-focus photos while keeping portrait bokeh and sunsets safe.",
+            badge: "Neural Vision Analysis"
         ),
         OnboardingSlide(
-            icon: "arrow.clockwise.circle.fill",
-            iconColor: Color.green,
-            title: "Pull to Refresh & Safe Trash",
-            description: "Pull down anywhere to refresh your gallery. When you clean items, they are safely held in Apple Photos 'Recently Deleted' for 30 days before permanent removal.",
-            badge: "Safe 30-Day Recovery"
+            icon: "person.2.circle.fill",
+            iconColor: Color.purple,
+            title: "Private Face Directory",
+            description: "Biometrically groups family and friends with closed-eye blink detection — 100% on-device with zero cloud uploads.",
+            badge: "100% Offline & Private"
         )
     ]
     
     var body: some View {
         ZStack {
+            if isShowingPermissionPrompt {
+                PermissionPrePromptView { status in
+                    hasCompletedOnboarding = true
+                    if status == .authorized || status == .limited {
+                        appModel.onPhotoAccessGranted()
+                    }
+                    onFinished?()
+                }
+                .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .opacity))
+            } else {
+                carouselView
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.35), value: isShowingPermissionPrompt)
+    }
+    
+    private var carouselView: some View {
+        ZStack {
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
-            VStack(spacing: 24) {
+            VStack(spacing: 0) {
                 // Top skip button
                 HStack {
                     Spacer()
                     Button("Skip") {
-                        completeOnboarding()
+                        withAnimation(.snappy(duration: 0.35)) {
+                            isShowingPermissionPrompt = true
+                        }
                     }
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -65,11 +92,13 @@ struct OnboardingView: View {
                 VStack(spacing: 12) {
                     Button {
                         if currentStep < slides.count - 1 {
-                            withAnimation(.easeInOut(duration: 0.3)) {
+                            withAnimation(.snappy(duration: 0.3)) {
                                 currentStep += 1
                             }
                         } else {
-                            completeOnboarding()
+                            withAnimation(.snappy(duration: 0.35)) {
+                                isShowingPermissionPrompt = true
+                            }
                         }
                     } label: {
                         Text(currentStep == slides.count - 1 ? "Get Started" : "Continue")
@@ -81,13 +110,13 @@ struct OnboardingView: View {
                     }
                     .padding(.horizontal, 24)
                     
-                    Text("PicSmart processes everything on-device. Your photos never leave your device.")
+                    Text("PicSmart processes everything offline. Your photos never leave your device.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
                 }
-                .padding(.bottom, 20)
+                .padding(.bottom, 24)
             }
         }
     }
@@ -131,11 +160,6 @@ struct OnboardingView: View {
             Spacer()
             Spacer()
         }
-    }
-    
-    private func completeOnboarding() {
-        hasCompletedOnboarding = true
-        dismiss()
     }
 }
 

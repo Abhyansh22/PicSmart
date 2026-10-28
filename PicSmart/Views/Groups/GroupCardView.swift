@@ -7,14 +7,13 @@ import SwiftUI
 import Photos
 
 struct GroupCardView: View {
-    @Binding var group: AssetGroup
+    let group: AssetGroup
     var isSelectionMode: Bool = false
     var onKeeperChanged: ((String) -> Void)?
     var onToggleMarked: ((String) -> Void)?
     var onDeleteGroup: (() -> Void)?
     var onDeleteSingleAsset: ((String) -> Void)?
-    
-    @State private var showingCompare = false
+    var onCompare: (() -> Void)?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -38,7 +37,7 @@ struct GroupCardView: View {
                 Spacer()
                 
                 Button {
-                    showingCompare = true
+                    onCompare?()
                 } label: {
                     Label("Compare", systemImage: "arrow.left.arrow.right")
                         .font(.caption.weight(.medium))
@@ -94,7 +93,7 @@ struct GroupCardView: View {
                             if isSelectionMode {
                                 onToggleMarked?(asset.localIdentifier)
                             } else {
-                                showingCompare = true
+                                onCompare?()
                             }
                         }
                         .contextMenu {
@@ -132,13 +131,5 @@ struct GroupCardView: View {
         }
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .sheet(isPresented: $showingCompare) {
-            CompareView(
-                group: $group,
-                onKeeperChanged: onKeeperChanged,
-                onToggleMarked: onToggleMarked,
-                onDeleteSingleAsset: onDeleteSingleAsset
-            )
-        }
     }
 }
