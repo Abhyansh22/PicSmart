@@ -23,28 +23,10 @@ final class GroupedScanViewModel {
     var onScanCompleted: (() -> Void)?
     
     @ObservationIgnored
-    private var scanTask: Task<Void, Never>?
-    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
     
     init(category: GalleryCategory) {
         self.category = category
-        
-        PhotoLibraryService.shared.libraryChangePublisher
-            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, self.isActive else { return }
-                self.startScan()
-            }
-            .store(in: &cancellables)
-    }
-    
-    func startScanIfNeeded() {
-        let authStatus = PhotoLibraryService.shared.authorizationStatus
-        guard authStatus == .authorized || authStatus == .limited else { return }
-        if !isScanning && !hasCompletedScan {
-            startScan()
-        }
     }
     
     func onAppear() {
@@ -53,8 +35,6 @@ final class GroupedScanViewModel {
     
     func onDisappear() {
         isActive = false
-        // Note: We DO NOT cancel the scan task here so that navigating back
-        // keeps background scanning alive and doesn't discard user progress.
     }
     
     var totalSavingsBytes: Int64 {
@@ -63,14 +43,6 @@ final class GroupedScanViewModel {
     
     var totalRedundantCount: Int {
         groups.reduce(0) { $0 + $1.markedForDeletionIds.count }
-    }
-    
-    func startScan() {
-        guard !isScanning else { return }
-        scanTask?.cancel()
-        scanTask = Task {
-            await executeScan()
-        }
     }
     
     func executeScan() async {
@@ -82,12 +54,7 @@ final class GroupedScanViewModel {
             return
         }
         
-        guard !isScanning else {
-            while isScanning {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            return
-        }
+        guard !isScanning else { return }
         
         isScanning = true
         hasCompletedScan = false
@@ -170,8 +137,6 @@ final class GroupedScanViewModel {
     }
     
     func cancel() {
-        scanTask?.cancel()
-        scanTask = nil
         isScanning = false
         hasCompletedScan = false
         progress = nil

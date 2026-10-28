@@ -174,7 +174,10 @@ actor PeopleAnalysisEngine {
                 }
                 
                 while let result = await group.next() {
-                    if Task.isCancelled { break }
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
                     completedCount += 1
                     
                     if let item = result.item, item.faceCount > 0 {
@@ -204,8 +207,11 @@ actor PeopleAnalysisEngine {
                         ))
                     }
                     
-                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .people)
-                    if !Task.isCancelled && nextIndex < missingAssets.count {
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    if nextIndex < missingAssets.count {
                         let nextAsset = missingAssets[nextIndex]
                         nextIndex += 1
                         group.addTask {
@@ -223,6 +229,12 @@ actor PeopleAnalysisEngine {
             Task.detached(priority: .utility) {
                 try? await PersistentClusterStore.shared.saveFaceEmbeddings(toSave)
             }
+        }
+        
+        // If cancelled during face detection/embedding, DO NOT run clustering!
+        // Return partial photoItems immediately so checkpoints are preserved without corrupting clusters.
+        guard !Task.isCancelled else {
+            return PeopleScanOutput(personClusters: [], allPhotoItems: photoItems)
         }
         
         // Identity Clustering with Accelerate Cosine DBSCAN
@@ -304,6 +316,9 @@ actor PeopleAnalysisEngine {
     }
     
     private func analyzeAsset(asset: PHAsset, cachedDTOs: [FaceEmbeddingDTO]?) async -> AssetFaceResult {
+        guard !Task.isCancelled else {
+            return AssetFaceResult(item: nil, faces: [], newEmbeddings: [])
+        }
         // If already cached in SwiftData, reconstruct in microseconds without re-running Vision / CoreML
         if let cachedDTOs, !cachedDTOs.isEmpty {
             let validFaces = cachedDTOs.filter { $0.faceIndex != -1 }
@@ -349,7 +364,15 @@ actor PeopleAnalysisEngine {
                 try handler.perform([landmarksRequest])
                 let observations = landmarksRequest.results ?? []
                 guard !observations.isEmpty else {
-                    return AssetFaceResult(item: nil, faces: [], newEmbeddings: [])
+                    let noFaceDTO = FaceEmbeddingDTO(
+                        id: "\(asset.localIdentifier)_-1",
+                        assetIdentifier: asset.localIdentifier,
+                        faceIndex: -1,
+                        boundingBox: .zero,
+                        captureQuality: 0,
+                        embedding: []
+                    )
+                    return AssetFaceResult(item: nil, faces: [], newEmbeddings: [noFaceDTO])
                 }
                 
                 let imgW = CGFloat(cgImage.width)

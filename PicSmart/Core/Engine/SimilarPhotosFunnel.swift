@@ -114,7 +114,10 @@ struct SimilarPhotosFunnel: Sendable {
                 
                 // 2. Sliding window: as one finishes, collect and enqueue the next
                 while let result = await group.next() {
-                    if Task.isCancelled { break }
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
                     
                     if let sig = result.signature, let dto = result.dto {
                         signatures.append(sig)
@@ -141,8 +144,11 @@ struct SimilarPhotosFunnel: Sendable {
                     }
                     
                     // Sliding window enqueue
-                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .similarPhotos)
-                    if !Task.isCancelled && nextMissingIndex < missingAssets.count {
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    if nextMissingIndex < missingAssets.count {
                         let nextAsset = missingAssets[nextMissingIndex]
                         nextMissingIndex += 1
                         group.addTask {
@@ -217,7 +223,6 @@ struct SimilarPhotosFunnel: Sendable {
         var lastPrintProgressTime = CACurrentMediaTime()
         for id in neededPrintIds {
             if Task.isCancelled { return [] }
-            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .similarPhotos)
             if let asset = assetMap[id] {
                 if let obs = await generateVisionFeaturePrint(for: asset) {
                     observations[id] = obs
@@ -292,6 +297,9 @@ struct SimilarPhotosFunnel: Sendable {
     }
     
     private static func computeFingerprint(for asset: PHAsset) async -> FingerprintResult {
+        guard !Task.isCancelled else {
+            return FingerprintResult(signature: nil, dto: nil)
+        }
         guard let cgImage = await ThumbnailService.shared.requestFastAnalysisThumbnail(for: asset, targetSize: CGSize(width: 32, height: 32)) else {
             return FingerprintResult(signature: nil, dto: nil)
         }

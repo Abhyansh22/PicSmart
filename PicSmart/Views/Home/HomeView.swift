@@ -49,8 +49,7 @@ struct HomeView: View {
                                 NavigationLink(value: category) {
                                     CategoryCardView(
                                         category: category,
-                                        count: appModel.badgeCount(for: category),
-                                        isScanning: appModel.isScanning(for: category)
+                                        status: appModel.status(for: category)
                                     )
                                     .contentShape(RoundedRectangle(cornerRadius: 18))
                                 }
@@ -75,8 +74,7 @@ struct HomeView: View {
                                 NavigationLink(value: category) {
                                     CategoryCardView(
                                         category: category,
-                                        count: appModel.badgeCount(for: category),
-                                        isScanning: appModel.isScanning(for: category)
+                                        status: appModel.status(for: category)
                                     )
                                     .contentShape(RoundedRectangle(cornerRadius: 18))
                                 }

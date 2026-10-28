@@ -123,7 +123,10 @@ actor BlurredPhotosFunnel {
                 }
                 
                 while let result = await group.next() {
-                    if Task.isCancelled { break }
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
                     completedCount += 1
                     
                     if let (_, _, recordDTO, item) = result {
@@ -152,8 +155,11 @@ actor BlurredPhotosFunnel {
                         ))
                     }
                     
-                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .blurredPhotos)
-                    if !Task.isCancelled && nextIndex < missingAssets.count {
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    if nextIndex < missingAssets.count {
                         let nextAsset = missingAssets[nextIndex]
                         nextIndex += 1
                         group.addTask {
@@ -175,6 +181,7 @@ actor BlurredPhotosFunnel {
     }
     
     private func evaluateAssetSharpness(_ asset: PHAsset) async -> (PHAsset, Double, BlurRecordDTO?, BlurredPhotoItem?)? {
+        guard !Task.isCancelled else { return nil }
         // Use high-fidelity 1024px thumbnail to preserve optical edge frequencies (eyelashes, hair, texture).
         guard let cgImage = await ThumbnailService.shared.requestAnalysisThumbnail(
             for: asset,
@@ -185,7 +192,7 @@ actor BlurredPhotosFunnel {
         
         return autoreleasepool { () -> (PHAsset, Double, BlurRecordDTO?, BlurredPhotoItem?)? in
             let aestheticsRequest = VNCalculateImageAestheticsScoresRequest()
-            let faceRequest = VNDetectFaceLandmarksRequest()
+            let faceRequest = VNDetectFaceCaptureQualityRequest()
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
             
             do {
@@ -199,7 +206,7 @@ actor BlurredPhotosFunnel {
             let aestheticObs = aestheticsRequest.results?.first
             let overallAestheticScore = Double(aestheticObs?.overallScore ?? 0.0) // Range: -1.0 to 1.0
             
-            // 2. Face Landmark & Optical Capture Quality
+            // 2. Face Detection & Optical Capture Quality
             let faceResults = faceRequest.results ?? []
             let maxFaceQuality = faceResults.compactMap { $0.faceCaptureQuality.map(Double.init) }.max() ?? 0.0
             let hasFace = !faceResults.isEmpty

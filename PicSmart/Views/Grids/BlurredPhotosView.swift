@@ -159,12 +159,11 @@ struct BlurredPhotosView: View {
             }
         }
         .onAppear {
-            AnalysisPipelineCoordinator.shared.elevatePriority(for: .blurredPhotos, in: appModel)
+            AnalysisPipelineCoordinator.shared.userEntered(.blurredPhotos, in: appModel)
             viewModel.onAppear()
-            viewModel.startScanIfNeeded()
         }
         .onDisappear {
-            AnalysisPipelineCoordinator.shared.releasePriority(for: .blurredPhotos)
+            AnalysisPipelineCoordinator.shared.userExited(.blurredPhotos)
             viewModel.onDisappear()
         }
         .sheet(item: $activeAsset) { asset in

@@ -79,11 +79,6 @@ struct MediaGridView: View {
         .onDisappear {
             viewModel.onDisappear()
         }
-        .task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard !Task.isCancelled else { return }
-            viewModel.startLoadIfNeeded()
-        }
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)
         }

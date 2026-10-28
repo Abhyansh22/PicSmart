@@ -119,19 +119,12 @@ struct GroupedAssetGridView: View {
             }
         }
         .onAppear {
-            AnalysisPipelineCoordinator.shared.elevatePriority(for: category, in: appModel)
+            AnalysisPipelineCoordinator.shared.userEntered(category, in: appModel)
             viewModel.onAppear()
-            viewModel.startScanIfNeeded()
         }
         .onDisappear {
-            AnalysisPipelineCoordinator.shared.releasePriority(for: category)
+            AnalysisPipelineCoordinator.shared.userExited(category)
             viewModel.onDisappear()
-        }
-        .task {
-            // Defer scan start by 350ms to allow UINavigationController push transition to settle cleanly
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard !Task.isCancelled else { return }
-            viewModel.startScanIfNeeded()
         }
         .alert("Clean All Marked \(category.title)?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }

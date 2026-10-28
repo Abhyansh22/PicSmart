@@ -51,6 +51,8 @@ final class AnalysisPipelineCoordinator {
     
     @ObservationIgnored
     private var schedulerTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var activeCategoryScanTask: Task<Void, Never>?
     
     /// Baseline order of background analysis based on computational complexity:
     @ObservationIgnored
@@ -68,16 +70,11 @@ final class AnalysisPipelineCoordinator {
     // MARK: - Priority Management (2-Space Window Handshake)
     
     /// Called when the user navigates into a category screen.
-    func elevatePriority(for category: GalleryCategory, in appModel: AppModel? = nil) {
+    func userEntered(_ category: GalleryCategory, in appModel: AppModel) {
         foregroundScreenCategory = category
-        
-        guard let appModel else { return }
         
         // If another category is currently executing in Slot 1 and is NOT this category:
         if let currentS1 = slot1ActiveCategory, currentS1 != category {
-            // Cancel current S1 cleanly (Option 2: Clean Task Cancellation)
-            cancelCategoryTask(currentS1, in: appModel)
-            
             // Push current Slot 2 to stack if valid and not redundant
             if let existingS2 = slot2InterruptedCategory, existingS2 != currentS1 && existingS2 != category {
                 if !interruptedStack.contains(existingS2) {
@@ -86,26 +83,41 @@ final class AnalysisPipelineCoordinator {
             }
             slot2InterruptedCategory = currentS1
             interruptedStack.removeAll(where: { $0 == currentS1 || $0 == category })
+            
+            // Cooperatively cancel the running category task so it checkpoints & yields immediately!
+            activeCategoryScanTask?.cancel()
+            activeCategoryScanTask = nil
         }
         
         // Slot 1 is now the user's active intent
         slot1ActiveCategory = category
         
-        // Ensure scheduler is active
-        startProactiveBackgroundScan(appModel: appModel)
-        
-        // Launch Category scan immediately
-        triggerCategoryScan(category, in: appModel)
+        // Ensure scheduler is active to execute Slot 1 immediately
+        startProactiveBackgroundScan(appModel: appModel, delayNanoseconds: 0)
+    }
+    
+    /// Backwards compatible alias for userEntered
+    func elevatePriority(for category: GalleryCategory, in appModel: AppModel? = nil) {
+        guard let appModel else {
+            foregroundScreenCategory = category
+            return
+        }
+        userEntered(category, in: appModel)
     }
     
     /// Called when the user leaves the category screen.
-    func releasePriority(for category: GalleryCategory) {
+    func userExited(_ category: GalleryCategory) {
         if foregroundScreenCategory == category {
             foregroundScreenCategory = nil
         }
         // Anti-Thrashing: Slot 1 REMAINS category!
         // It continues executing in the background until 100% complete,
         // and then the scheduler automatically awakens Slot 2 or continues the baseline queue.
+    }
+    
+    /// Backwards compatible alias for userExited
+    func releasePriority(for category: GalleryCategory) {
+        userExited(category)
     }
     
     // MARK: - Background Lifecycle Management
@@ -120,30 +132,11 @@ final class AnalysisPipelineCoordinator {
         isSuspendedForBackground = false
     }
     
-    /// Checks if a category should cooperatively yield its CPU/worker slots.
-    nonisolated func shouldYield(for category: GalleryCategory) async -> Bool {
-        let (s1, isSuspended) = await MainActor.run { (self.slot1ActiveCategory, self.isSuspendedForBackground) }
-        if isSuspended { return true }
-        guard let s1 else { return false }
-        return s1 != category
-    }
-    
-    /// Cooperatively pauses if preempted by another slot.
-    nonisolated func yieldIfPreempted(for category: GalleryCategory) async {
-        while await shouldYield(for: category) {
-            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms cooperative wait
-        }
-        
-        // Cooperative pacing when on Home screen (foregroundScreenCategory == nil)
-        let foreground = await MainActor.run { self.foregroundScreenCategory }
-        if foreground == nil {
-            try? await Task.sleep(nanoseconds: 20_000_000) // 20ms pacing for 120 FPS UI
-        }
-    }
-    
     // MARK: - Cancellation
     
     func cancel() {
+        activeCategoryScanTask?.cancel()
+        activeCategoryScanTask = nil
         schedulerTask?.cancel()
         schedulerTask = nil
         slot1ActiveCategory = nil
@@ -155,8 +148,10 @@ final class AnalysisPipelineCoordinator {
     // MARK: - Proactive 2-Space Scheduler Loop
     
     /// Starts the 2-Space Window Priority Scheduler.
-    func startProactiveBackgroundScan(appModel: AppModel, force: Bool = false) {
+    func startProactiveBackgroundScan(appModel: AppModel, force: Bool = false, delayNanoseconds: UInt64 = 1_000_000_000) {
         if force {
+            activeCategoryScanTask?.cancel()
+            activeCategoryScanTask = nil
             schedulerTask?.cancel()
             schedulerTask = nil
         }
@@ -170,13 +165,15 @@ final class AnalysisPipelineCoordinator {
         schedulerTask = Task.detached(priority: .utility) { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             
-            // Allow initial cold launch render & scroll to settle (1000ms delay)
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
             
             await self.runSchedulerLoop(appModel: appModel)
             
             await MainActor.run {
                 self.schedulerTask = nil
+                self.activeCategoryScanTask = nil
             }
         }
     }
@@ -238,8 +235,24 @@ final class AnalysisPipelineCoordinator {
                 categoryToRun = next
             }
             
-            // 3. Execute the single active category to completion
-            await runCategoryScan(categoryToRun, in: appModel)
+            // 3. Execute the single active category as a cooperative child task
+            let scanTask = Task { [weak self, weak appModel] in
+                guard let self, let appModel else { return }
+                await self.runCategoryScan(categoryToRun, in: appModel)
+            }
+            
+            await MainActor.run {
+                self.activeCategoryScanTask = scanTask
+            }
+            
+            await scanTask.value
+            let wasCancelled = scanTask.isCancelled
+            
+            await MainActor.run {
+                if self.activeCategoryScanTask == scanTask {
+                    self.activeCategoryScanTask = nil
+                }
+            }
             
             // 4. Mark Slot 1 clear if completed
             await MainActor.run {
@@ -254,46 +267,10 @@ final class AnalysisPipelineCoordinator {
                 }
             }
             
-            // Cooperative pause between category transitions
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-    }
-    
-    private func triggerCategoryScan(_ category: GalleryCategory, in appModel: AppModel) {
-        switch category {
-        case .duplicatePhotos:
-            appModel.duplicatePhotosViewModel.startScanIfNeeded()
-        case .duplicateVideos:
-            appModel.duplicateVideosViewModel.startScanIfNeeded()
-        case .similarPhotos:
-            appModel.similarPhotosViewModel.startScanIfNeeded()
-        case .largeVideos:
-            appModel.largeVideosViewModel.startLoadIfNeeded()
-        case .blurredPhotos:
-            appModel.blurredPhotosViewModel.startScanIfNeeded()
-        case .people:
-            appModel.peopleAndFacesViewModel.startScanIfNeeded()
-        default:
-            break
-        }
-    }
-    
-    private func cancelCategoryTask(_ category: GalleryCategory, in appModel: AppModel) {
-        switch category {
-        case .duplicatePhotos:
-            appModel.duplicatePhotosViewModel.cancel()
-        case .duplicateVideos:
-            appModel.duplicateVideosViewModel.cancel()
-        case .similarPhotos:
-            appModel.similarPhotosViewModel.cancel()
-        case .largeVideos:
-            appModel.largeVideosViewModel.cancel()
-        case .blurredPhotos:
-            appModel.blurredPhotosViewModel.cancel()
-        case .people:
-            appModel.peopleAndFacesViewModel.cancel()
-        default:
-            break
+            if !wasCancelled {
+                // Cooperative pause between natural category transitions
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
     }
     

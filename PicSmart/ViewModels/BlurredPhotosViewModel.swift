@@ -32,20 +32,9 @@ final class BlurredPhotosViewModel {
     var onScanCompleted: (() -> Void)?
     
     @ObservationIgnored
-    private var scanTask: Task<Void, Never>?
-    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
     
     init() {
-        PhotoLibraryService.shared.libraryChangePublisher
-            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if self.isActive {
-                    self.startScan()
-                }
-            }
-            .store(in: &cancellables)
     }
     
     // MARK: - Filtered Properties
@@ -102,22 +91,6 @@ final class BlurredPhotosViewModel {
         isActive = false
     }
     
-    func startScanIfNeeded() {
-        let authStatus = PhotoLibraryService.shared.authorizationStatus
-        guard authStatus == .authorized || authStatus == .limited else { return }
-        if !isScanning && !hasCompletedScan {
-            startScan()
-        }
-    }
-    
-    func startScan() {
-        guard !isScanning else { return }
-        scanTask?.cancel()
-        scanTask = Task {
-            await executeScan()
-        }
-    }
-    
     func executeScan() async {
         let authStatus = PhotoLibraryService.shared.authorizationStatus
         guard authStatus == .authorized || authStatus == .limited else {
@@ -127,12 +100,7 @@ final class BlurredPhotosViewModel {
             return
         }
         
-        guard !isScanning else {
-            while isScanning {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            return
-        }
+        guard !isScanning else { return }
         
         isScanning = true
         hasCompletedScan = false
@@ -184,8 +152,6 @@ final class BlurredPhotosViewModel {
     }
     
     func cancel() {
-        scanTask?.cancel()
-        scanTask = nil
         isScanning = false
         hasCompletedScan = false
         progress = nil

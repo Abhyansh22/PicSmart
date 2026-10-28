@@ -31,37 +31,21 @@ final class MediaCollectionViewModel {
     var onScanCompleted: (() -> Void)?
     
     @ObservationIgnored
-    private var loadTask: Task<Void, Never>?
-    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
     
     init(category: GalleryCategory) {
         self.category = category
-        
-        PhotoLibraryService.shared.libraryChangePublisher
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, self.isActive else { return }
-                self.load()
-            }
-            .store(in: &cancellables)
-    }
-    
-    func startLoadIfNeeded() {
-        let authStatus = PhotoLibraryService.shared.authorizationStatus
-        guard authStatus == .authorized || authStatus == .limited else { return }
-        if !isLoading && !hasLoaded {
-            load()
-        }
     }
     
     func onAppear() {
         isActive = true
+        if (category == .screenshots || category == .videos) && !hasLoaded {
+            Task { await executeLoad() }
+        }
     }
     
     func onDisappear() {
         isActive = false
-        // DO NOT cancel background loading
     }
     
     var totalCount: Int {
@@ -133,14 +117,6 @@ final class MediaCollectionViewModel {
         self.onScanCompleted?()
     }
     
-    func load() {
-        guard !isLoading else { return }
-        loadTask?.cancel()
-        loadTask = Task {
-            await executeLoad()
-        }
-    }
-    
     func executeLoad() async {
         let authStatus = PhotoLibraryService.shared.authorizationStatus
         guard authStatus == .authorized || authStatus == .limited else {
@@ -149,12 +125,7 @@ final class MediaCollectionViewModel {
             return
         }
         
-        guard !isLoading else {
-            while isLoading {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            return
-        }
+        guard !isLoading else { return }
         
         isLoading = true
         hasLoaded = false
@@ -264,8 +235,6 @@ final class MediaCollectionViewModel {
     }
     
     func cancel() {
-        loadTask?.cancel()
-        loadTask = nil
         isLoading = false
         hasLoaded = false
         progressMessage = nil

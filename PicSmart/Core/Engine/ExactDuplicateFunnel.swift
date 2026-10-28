@@ -60,7 +60,7 @@ struct ExactDuplicateFunnel: Sendable {
         var lastSizeProgressTime = CACurrentMediaTime()
         
         for group in candidateGroups {
-            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicatePhotos)
+            if Task.isCancelled { return [] }
             for asset in group {
                 if Task.isCancelled { return [] }
                 autoreleasepool {
@@ -89,7 +89,6 @@ struct ExactDuplicateFunnel: Sendable {
         
         for candidateList in sizeCandidates {
             if Task.isCancelled { break }
-            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicatePhotos)
             
             var hashToAssets = [String: [PHAsset]]()
             for asset in candidateList {

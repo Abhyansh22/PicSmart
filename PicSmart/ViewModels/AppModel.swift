@@ -96,9 +96,17 @@ final class AppModel {
             let allBlurRecords = (try? await PersistentClusterStore.shared.loadAllBlurRecords()) ?? [:]
             let isBlurComplete = totalImages > 0 && allBlurRecords.count >= totalImages
             
+            let allFaceRecords = (try? await PersistentClusterStore.shared.loadAllFaceEmbeddings()) ?? []
+            let evaluatedFaceAssetCount = Set(allFaceRecords.map(\.assetIdentifier)).count
+            let isPeopleComplete = (totalImages > 0 && evaluatedFaceAssetCount >= totalImages)
+                || UserDefaults.standard.bool(forKey: "isPeopleScanComplete")
+            
             if let persons, !persons.isEmpty {
-                self.peopleAndFacesViewModel.hydrate(from: persons, isFullyEvaluated: false)
+                self.peopleAndFacesViewModel.hydrate(from: persons, isFullyEvaluated: isPeopleComplete)
                 self.counts[.people] = self.peopleAndFacesViewModel.totalCount
+            } else if isPeopleComplete {
+                self.peopleAndFacesViewModel.hasCompletedScan = true
+                self.counts[.people] = 0
             }
             if !blurred.isEmpty {
                 self.blurredPhotosViewModel.hydrate(from: blurred, isFullyEvaluated: isBlurComplete)
@@ -273,45 +281,160 @@ final class AppModel {
         }
     }
     
-    // Direct reactive badge accessors so SwiftUI observes the child viewmodels directly
-    func badgeCount(for category: GalleryCategory) -> Int? {
+    // MARK: - Category Lifecycle Status
+    
+    func status(for category: GalleryCategory) -> CategoryStatus {
         switch category {
         case .screenshots:
-            return screenshotsViewModel.hasLoaded ? screenshotsViewModel.totalCount : counts[.screenshots]
+            if screenshotsViewModel.hasLoaded {
+                return .completed(count: screenshotsViewModel.totalCount)
+            }
+            if let count = counts[.screenshots] {
+                return .completed(count: count)
+            }
+            return .notStarted
+            
         case .videos:
-            return videosViewModel.hasLoaded ? videosViewModel.totalCount : counts[.videos]
-        case .blurredPhotos:
-            return blurredPhotosViewModel.hasCompletedScan ? blurredPhotosViewModel.totalCount : (blurredPhotosViewModel.items.isEmpty ? counts[.blurredPhotos] : blurredPhotosViewModel.totalCount)
-        case .people:
-            return peopleAndFacesViewModel.hasCompletedScan ? peopleAndFacesViewModel.totalCount : counts[.people]
+            if videosViewModel.hasLoaded {
+                return .completed(count: videosViewModel.totalCount)
+            }
+            if let count = counts[.videos] {
+                return .completed(count: count)
+            }
+            return .notStarted
+            
         case .largeVideos:
-            return largeVideosViewModel.hasLoaded ? largeVideosViewModel.totalCount : counts[.largeVideos]
+            if (largeVideosViewModel.isLoading || largeVideosViewModel.isRefreshing || AnalysisPipelineCoordinator.shared.slot1ActiveCategory == .largeVideos) && !largeVideosViewModel.hasLoaded {
+                let prog = largeVideosViewModel.progress
+                return .analyzing(
+                    progress: prog?.fractionCompleted ?? 0,
+                    stage: prog?.stage ?? "Analyzing…",
+                    completed: prog?.completed ?? largeVideosViewModel.totalCount,
+                    total: prog?.total ?? 0
+                )
+            }
+            if largeVideosViewModel.hasLoaded {
+                return .completed(count: largeVideosViewModel.totalCount)
+            }
+            if let count = counts[.largeVideos], count > 0 {
+                return .paused(completed: count, total: 0)
+            }
+            return .notStarted
+            
         case .duplicatePhotos:
-            return duplicatePhotosViewModel.hasCompletedScan ? duplicatePhotosViewModel.totalRedundantCount : counts[.duplicatePhotos]
+            if (duplicatePhotosViewModel.isScanning || duplicatePhotosViewModel.isRefreshing || AnalysisPipelineCoordinator.shared.slot1ActiveCategory == .duplicatePhotos) && !duplicatePhotosViewModel.hasCompletedScan {
+                let prog = duplicatePhotosViewModel.progress
+                return .analyzing(
+                    progress: prog?.fractionCompleted ?? 0,
+                    stage: prog?.stage ?? "Scanning…",
+                    completed: prog?.completed ?? duplicatePhotosViewModel.totalRedundantCount,
+                    total: prog?.total ?? 0
+                )
+            }
+            if duplicatePhotosViewModel.hasCompletedScan {
+                return .completed(count: duplicatePhotosViewModel.totalRedundantCount)
+            }
+            if duplicatePhotosViewModel.totalRedundantCount > 0 {
+                return .paused(completed: duplicatePhotosViewModel.totalRedundantCount, total: 0)
+            }
+            if let count = counts[.duplicatePhotos], count > 0 {
+                return .paused(completed: count, total: 0)
+            }
+            return .notStarted
+            
         case .duplicateVideos:
-            return duplicateVideosViewModel.hasCompletedScan ? duplicateVideosViewModel.totalRedundantCount : counts[.duplicateVideos]
+            if (duplicateVideosViewModel.isScanning || duplicateVideosViewModel.isRefreshing || AnalysisPipelineCoordinator.shared.slot1ActiveCategory == .duplicateVideos) && !duplicateVideosViewModel.hasCompletedScan {
+                let prog = duplicateVideosViewModel.progress
+                return .analyzing(
+                    progress: prog?.fractionCompleted ?? 0,
+                    stage: prog?.stage ?? "Scanning…",
+                    completed: prog?.completed ?? duplicateVideosViewModel.totalRedundantCount,
+                    total: prog?.total ?? 0
+                )
+            }
+            if duplicateVideosViewModel.hasCompletedScan {
+                return .completed(count: duplicateVideosViewModel.totalRedundantCount)
+            }
+            if duplicateVideosViewModel.totalRedundantCount > 0 {
+                return .paused(completed: duplicateVideosViewModel.totalRedundantCount, total: 0)
+            }
+            if let count = counts[.duplicateVideos], count > 0 {
+                return .paused(completed: count, total: 0)
+            }
+            return .notStarted
+            
         case .similarPhotos:
-            return similarPhotosViewModel.hasCompletedScan ? similarPhotosViewModel.totalRedundantCount : counts[.similarPhotos]
+            if (similarPhotosViewModel.isScanning || similarPhotosViewModel.isRefreshing || AnalysisPipelineCoordinator.shared.slot1ActiveCategory == .similarPhotos) && !similarPhotosViewModel.hasCompletedScan {
+                let prog = similarPhotosViewModel.progress
+                return .analyzing(
+                    progress: prog?.fractionCompleted ?? 0,
+                    stage: prog?.stage ?? "Scanning…",
+                    completed: prog?.completed ?? similarPhotosViewModel.totalRedundantCount,
+                    total: prog?.total ?? 0
+                )
+            }
+            if similarPhotosViewModel.hasCompletedScan {
+                return .completed(count: similarPhotosViewModel.totalRedundantCount)
+            }
+            if similarPhotosViewModel.totalRedundantCount > 0 {
+                return .paused(completed: similarPhotosViewModel.totalRedundantCount, total: 0)
+            }
+            if let count = counts[.similarPhotos], count > 0 {
+                return .paused(completed: count, total: 0)
+            }
+            return .notStarted
+            
+        case .blurredPhotos:
+            if (blurredPhotosViewModel.isScanning || blurredPhotosViewModel.isRefreshing || AnalysisPipelineCoordinator.shared.slot1ActiveCategory == .blurredPhotos) && !blurredPhotosViewModel.hasCompletedScan {
+                let prog = blurredPhotosViewModel.progress
+                return .analyzing(
+                    progress: prog?.fractionCompleted ?? 0,
+                    stage: prog?.stage ?? "Scanning…",
+                    completed: prog?.completed ?? blurredPhotosViewModel.totalCount,
+                    total: prog?.total ?? 0
+                )
+            }
+            if blurredPhotosViewModel.hasCompletedScan {
+                return .completed(count: blurredPhotosViewModel.totalCount)
+            }
+            if !blurredPhotosViewModel.items.isEmpty {
+                return .paused(completed: blurredPhotosViewModel.totalCount, total: 0)
+            }
+            if let count = counts[.blurredPhotos], count > 0 {
+                return .paused(completed: count, total: 0)
+            }
+            return .notStarted
+            
+        case .people:
+            if (peopleAndFacesViewModel.isScanning || peopleAndFacesViewModel.isRefreshing || AnalysisPipelineCoordinator.shared.slot1ActiveCategory == .people) && !peopleAndFacesViewModel.hasCompletedScan {
+                let prog = peopleAndFacesViewModel.progress
+                return .analyzing(
+                    progress: prog?.fractionCompleted ?? 0,
+                    stage: prog?.stage ?? "Scanning…",
+                    completed: prog?.completed ?? peopleAndFacesViewModel.totalCount,
+                    total: prog?.total ?? 0
+                )
+            }
+            if peopleAndFacesViewModel.hasCompletedScan {
+                return .completed(count: peopleAndFacesViewModel.totalCount)
+            }
+            if peopleAndFacesViewModel.totalCount > 0 {
+                return .paused(completed: peopleAndFacesViewModel.totalCount, total: 0)
+            }
+            if let count = counts[.people], count > 0 {
+                return .paused(completed: count, total: 0)
+            }
+            return .notStarted
         }
     }
     
+    // Direct reactive badge accessors so SwiftUI observes the child viewmodels directly
+    func badgeCount(for category: GalleryCategory) -> Int? {
+        status(for: category).count
+    }
+    
     func isScanning(for category: GalleryCategory) -> Bool {
-        switch category {
-        case .duplicatePhotos:
-            return duplicatePhotosViewModel.isScanning || duplicatePhotosViewModel.isRefreshing
-        case .duplicateVideos:
-            return duplicateVideosViewModel.isScanning || duplicateVideosViewModel.isRefreshing
-        case .similarPhotos:
-            return similarPhotosViewModel.isScanning || similarPhotosViewModel.isRefreshing
-        case .largeVideos:
-            return largeVideosViewModel.isLoading || largeVideosViewModel.isRefreshing
-        case .blurredPhotos:
-            return blurredPhotosViewModel.isScanning || blurredPhotosViewModel.isRefreshing
-        case .people:
-            return peopleAndFacesViewModel.isScanning || peopleAndFacesViewModel.isRefreshing
-        default:
-            return false
-        }
+        status(for: category).isAnalyzing
     }
     
     func refreshCounts() {

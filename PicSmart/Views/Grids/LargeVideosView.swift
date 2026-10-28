@@ -113,18 +113,12 @@ struct LargeVideosView: View {
             }
         }
         .onAppear {
-            AnalysisPipelineCoordinator.shared.elevatePriority(for: .largeVideos, in: appModel)
+            AnalysisPipelineCoordinator.shared.userEntered(.largeVideos, in: appModel)
             viewModel.onAppear()
-            viewModel.startLoadIfNeeded()
         }
         .onDisappear {
-            AnalysisPipelineCoordinator.shared.releasePriority(for: .largeVideos)
+            AnalysisPipelineCoordinator.shared.userExited(.largeVideos)
             viewModel.onDisappear()
-        }
-        .task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard !Task.isCancelled else { return }
-            viewModel.startLoadIfNeeded()
         }
         .sheet(item: $selectedAsset) { asset in
             FullScreenAssetView(asset: asset)

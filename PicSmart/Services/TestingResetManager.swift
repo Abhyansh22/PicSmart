@@ -56,6 +56,7 @@ final class TestingResetManager {
         
         appModel.lifetimeBytesSaved = 0
         appModel.counts.removeAll()
+        UserDefaults.standard.removeObject(forKey: "isPeopleScanComplete")
         
         // 5. Re-run initial discovery as fresh install
         appModel.refreshCounts()

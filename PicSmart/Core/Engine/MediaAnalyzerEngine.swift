@@ -59,7 +59,6 @@ actor MediaAnalyzerEngine {
                 
                 for index in 0..<total {
                     if Task.isCancelled { break }
-                    await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .largeVideos)
                     
                     let asset = fetchResult.object(at: index)
                     let size: Int64

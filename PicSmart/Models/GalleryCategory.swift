@@ -97,3 +97,42 @@ enum GalleryCategory: String, CaseIterable, Identifiable, Hashable, Sendable {
         }
     }
 }
+
+/// Single, unambiguous lifecycle state for any category in PicSmart.
+public enum CategoryStatus: Equatable, Sendable {
+    /// Analysis has not been started yet.
+    case notStarted
+    
+    /// Actively analyzing media with progress percentage and human-readable stage.
+    case analyzing(progress: Double, stage: String, completed: Int, total: Int)
+    
+    /// Interrupted by user preemption or app suspension. Checkpointed at N items.
+    case paused(completed: Int, total: Int)
+    
+    /// 100% of assets in the library have been fully evaluated.
+    case completed(count: Int)
+    
+    public var isCompleted: Bool {
+        if case .completed = self { return true }
+        return false
+    }
+    
+    public var isAnalyzing: Bool {
+        if case .analyzing = self { return true }
+        return false
+    }
+    
+    public var isPaused: Bool {
+        if case .paused = self { return true }
+        return false
+    }
+    
+    public var count: Int? {
+        switch self {
+        case .completed(let count): return count
+        case .paused(let completed, _): return completed > 0 ? completed : nil
+        case .analyzing(_, _, let completed, _): return completed > 0 ? completed : nil
+        case .notStarted: return nil
+        }
+    }
+}

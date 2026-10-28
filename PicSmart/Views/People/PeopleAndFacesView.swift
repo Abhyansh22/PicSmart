@@ -54,7 +54,7 @@ struct PeopleAndFacesView: View {
                 ScanningProgressView(
                     category: .people,
                     progress: viewModel.progress,
-                    statusMessage: viewModel.statusMessage ?? "Clustering people & faces…"
+                    statusMessage: viewModel.statusMessage ?? "Analyzing people and faces…"
                 )
             } else if viewModel.personClusters.isEmpty {
                 ContentUnavailableView(
@@ -90,12 +90,11 @@ struct PeopleAndFacesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search people")
         .onAppear {
-            AnalysisPipelineCoordinator.shared.elevatePriority(for: .people, in: appModel)
+            AnalysisPipelineCoordinator.shared.userEntered(.people, in: appModel)
             viewModel.onAppear()
-            viewModel.startScanIfNeeded()
         }
         .onDisappear {
-            AnalysisPipelineCoordinator.shared.releasePriority(for: .people)
+            AnalysisPipelineCoordinator.shared.userExited(.people)
             viewModel.onDisappear()
         }
         .alert("Name Person", isPresented: $showingRenameAlert) {

@@ -59,7 +59,7 @@ struct VideoDuplicateFunnel: Sendable {
         var lastProgressTime = CACurrentMediaTime()
         
         for group in metaCandidates {
-            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicateVideos)
+            if Task.isCancelled { return [] }
             for asset in group {
                 if Task.isCancelled { return [] }
                 autoreleasepool {
@@ -88,7 +88,6 @@ struct VideoDuplicateFunnel: Sendable {
         
         for candidateList in sizeCandidates {
             if Task.isCancelled { break }
-            await AnalysisPipelineCoordinator.shared.yieldIfPreempted(for: .duplicateVideos)
             
             var keyframeToAssets = [String: [PHAsset]]()
             for asset in candidateList {
